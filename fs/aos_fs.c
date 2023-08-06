@@ -20,9 +20,8 @@ static struct dentry_operations aos_eops = {
 };
 
 /*
- * the fill_super() function is called to terminate the superblock initialization.
- * This initialization involves filling the struct super_block structure fields and
- * the initialization of the root directory inode
+ * This function is called to terminate the superblock initialization, which involves filling the
+ * struct super_block structure fields and the initialization of the root directory inode.
  * */
 static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 
@@ -31,9 +30,7 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     struct inode *root_inode;
     struct buffer_head *bh;
     struct timespec64 curr_time;
-    uint64_t magic;
     uint8_t *free_blocks;
-    uint16_t i;
 
     /* Updating the VFS super_block */
     sb->s_magic = MAGIC;
@@ -41,20 +38,18 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     sb->s_type = &aos_fs_type; // file_system_type
     sb->s_op = &aos_sbops; // super block operations
 
+    /* Fill an FS specific super block using page cache */
     if (!(bh = sb_bread(sb, SUPER_BLOCK_IDX))) return -EIO;
     memcpy(aos_sb, bh->b_data, AOS_BLOCK_SIZE);
     brelse(bh);
     if (aos_sb->magic != MAGIC) return -EINVAL;
 
-    if (!(info = (aos_fs_info_t *)(kzalloc(sizeof(aos_fs_info_t), GFP_KERNEL)))) return -ENOMEM;
-
-    /* Mark used blocks */
-    free_blocks = (uint8_t *)(vmalloc(info->sb->partition_size));
+    /* Prepare AOS FS specific super block */
+    free_blocks = (uint8_t *)(vzalloc(aos_sb->partition_size)); // using vmalloc to support a possibly large allocation
     if (!free_blocks) return -ENOMEM;
-    for (i = 0; i < info->sb->partition_size; i++){
-        free_blocks[i] = 0;
-    }
+    // noteme: eventually use vmalloc and initialize the array manually when the first blocks must be set as used
 
+    if (!(info = (aos_fs_info_t *)(kzalloc(sizeof(aos_fs_info_t), GFP_KERNEL)))) return -ENOMEM;
     info->vfs_sb = sb;
     info->sb = aos_sb;
     sb->s_fs_info = info;
@@ -120,7 +115,7 @@ struct dentry *aos_mount(struct file_system_type *fs_type, int flags, const char
     return ret;
 }
 
-static struct file_system_type aos_fs_type = {
+struct file_system_type aos_fs_type = {
     .owner = THIS_MODULE,
     .name = "aos_fs",
     .mount = aos_mount

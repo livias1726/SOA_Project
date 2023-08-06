@@ -8,7 +8,7 @@
 
 MODULE_LICENSE("GPL");
 
-int register_syscalls();
-void unregister_syscalls();
+int register_syscalls(void);
+void unregister_syscalls(void);
 
 #endif //SOA_PROJECT_CONFIG_H
