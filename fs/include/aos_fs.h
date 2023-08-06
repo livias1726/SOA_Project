@@ -26,11 +26,13 @@ struct aos_super_block {
     uint64_t magic;             /* Magic number to identify the file system */
     uint64_t block_size;        /* Block size in bytes */
     uint64_t partition_size;    /* Number of blocks in the file system */
-    uint64_t inodes_count;
-    uint64_t free_blocks;
+    uint64_t inode_blocks;      /* Number of blocks reserved for the inodes */
+    uint64_t inodes_count;      /* Number of inodes supported by the file system */
+    uint64_t free_inodes;       /* Bit vector to represent the state of each inode */
+    uint64_t free_blocks;       /* Bit vector to represent the state of each data block */
 
     // padding to fit into a single (first) block
-    char padding[AOS_BLOCK_SIZE - (5 * sizeof(uint64_t))];
+    char padding[AOS_BLOCK_SIZE - (7 * sizeof(uint64_t))];
 };
 
 /* inode definition */
