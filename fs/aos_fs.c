@@ -30,7 +30,6 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     struct inode *root_inode;
     struct buffer_head *bh;
     struct timespec64 curr_time;
-    uint8_t *free_blocks;
 
     /* Updating the VFS super_block */
     sb->s_magic = MAGIC;
@@ -45,10 +44,6 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     if (aos_sb->magic != MAGIC) return -EINVAL;
 
     /* Prepare AOS FS specific super block */
-    free_blocks = (uint8_t *)(vzalloc(aos_sb->partition_size)); // using vmalloc to support a possibly large allocation
-    if (!free_blocks) return -ENOMEM;
-    // noteme: eventually use vmalloc and initialize the array manually when the first blocks must be set as used
-
     if (!(info = (aos_fs_info_t *)(kzalloc(sizeof(aos_fs_info_t), GFP_KERNEL)))) return -ENOMEM;
     info->vfs_sb = sb;
     info->sb = aos_sb;
@@ -57,7 +52,6 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     // get a VFS inode for the root directory
     root_inode = iget_locked(sb, 0);
     if (!root_inode) {
-        vfree(info->free_blocks);
         kfree(info);
         return -ENOMEM;
     }
@@ -82,7 +76,6 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     sb->s_root = d_make_root(root_inode);
     if (!sb->s_root) {
         iget_failed(root_inode);
-        vfree(info->free_blocks);
         kfree(info);
         return -ENOMEM;
     }
@@ -108,9 +101,9 @@ struct dentry *aos_mount(struct file_system_type *fs_type, int flags, const char
     ret = mount_bdev(fs_type, flags, dev_name, data, aos_fill_super);
 
     if (unlikely(IS_ERR(ret))) {
-        printk("%s: mount failure", MODNAME);
+        printk(KERN_ERR "%s: mount failure", MODNAME);
     }else {
-        printk("%s: file system '%s' mounted\n", MODNAME, dev_name);
+        printk(KERN_INFO "%s: file system mounted on [%s]\n", MODNAME, dev_name);
     }
     return ret;
 }
