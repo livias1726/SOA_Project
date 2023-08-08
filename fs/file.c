@@ -133,7 +133,7 @@ static struct dentry *aos_lookup(struct inode *parent_inode, struct dentry *dent
             return ERR_PTR(-EIO);
         }
         FS_specific_inode = (struct aos_inode*)bh->b_data;
-        the_inode->i_size = FS_specific_inode->i_size;
+        the_inode->i_size = FS_specific_inode->file_size;
         brelse(bh);
 
         d_add(dentry, the_inode);

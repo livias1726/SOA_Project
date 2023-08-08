@@ -23,7 +23,7 @@ create-fs:
 	mkdir mount
 
 debug-fs:
-	./debug-fs image
+	./debug_fs image
 
 mount-fs:
 	mount -o loop -t aos_fs image ./mount/

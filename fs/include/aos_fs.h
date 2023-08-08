@@ -26,8 +26,8 @@ struct aos_super_block {
     uint64_t inode_blocks;      /* Number of blocks reserved for the inodes */
     uint64_t data_blocks;
     uint64_t inodes_count;      /* Number of inodes supported by the file system */
-    uint64_t *free_inodes;       /* Bit vector to represent the state of each inode */
-    uint64_t *free_blocks;       /* Bit vector to represent the state of each data block */
+    uint64_t free_inodes;       /* Bit vector to represent the state of each inode */
+    uint64_t free_blocks;       /* Bit vector to represent the state of each data block */
 
     // padding to fit into a single (first) block
     char padding[AOS_BLOCK_SIZE - (8 * sizeof(uint64_t))];
@@ -35,11 +35,14 @@ struct aos_super_block {
 
 /* inode definition */
 struct aos_inode {
-    mode_t i_mode;                      /* File type and access rights */
-    uint64_t i_ino;                     /* inode number: associated with a single file and passed as file descriptor */
-    uint64_t i_dbno;                    /* Data block number */
-    //atomic_t i_count;                   /* Usage counter */
-    loff_t i_size;                      /* File length in bytes */
+    mode_t mode;                        /* File type and access rights */
+    uint64_t inode_no;                  /* inode number */
+    uint64_t data_block_number;         /* Data block number */
+    uint64_t i_count;                   /* Usage counter */
+    union {
+        uint64_t file_size;             /* File size in bytes */
+        uint64_t dir_children_count;    /* or dir size in number of files */
+    };
     struct inode_operations * i_op;     /* inode operations */
     struct file_operations * i_fop;     /* Default file operations */
 };
@@ -54,7 +57,8 @@ struct aos_dir_record {
 struct aos_db_metadata{
     uint8_t is_valid;
     uint8_t is_empty;
-    uint16_t available_bytes;
+    uint16_t available_space;       /* in bytes */
+    uint64_t inode_no;
     char filename[FILENAME_MAXLEN];
 };
 

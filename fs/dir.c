@@ -20,7 +20,6 @@ static int aos_iterate(struct file *file, struct dir_context* ctx) {
     int i;
     int ret;
 
-
     /*
     // current directory
     if (ctx->pos == 0){
@@ -53,9 +52,7 @@ static int aos_iterate(struct file *file, struct dir_context* ctx) {
     }
     return 0;
      */
-
     fs_info = file->f_inode->i_sb->s_fs_info;
-
     pos = 1;
     for (i = 0; i < fs_info->sb->inodes_count; ++i){
         if (!(fs_info->sb->free_blocks >> i)) continue;
