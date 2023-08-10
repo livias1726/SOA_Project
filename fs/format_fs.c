@@ -6,6 +6,8 @@
 #include <stdlib.h>
 
 #include "include/aos_fs.h"
+#define ROUND_UP(a,b) (a + b - 1) / b
+
 
 /*
  * This user-level software will write the following information onto the disk
@@ -16,16 +18,15 @@
 
 static int build_superblock(int fd, int nblocks){
     ssize_t ret;
-    int ino_blocks;
-    ino_blocks = nblocks * INODE_BLOCK_RATIO;
+    int ino_blocks = ROUND_UP(nblocks * sizeof(struct aos_inode), AOS_BLOCK_SIZE);
 
     struct aos_super_block aos_sb = {
             .magic = MAGIC,
             .block_size = AOS_BLOCK_SIZE,
-            .partition_size = nblocks,
+            .partition_size = nblocks+ino_blocks+1,
             .inode_blocks = ino_blocks,
-            .inodes_count = (ino_blocks * AOS_BLOCK_SIZE) / sizeof(struct aos_inode),
-            .data_blocks = nblocks - 1 - ino_blocks
+            .inodes_count = nblocks,
+            .data_blocks = nblocks
     };
 
     ret = write(fd, (char *)&aos_sb, sizeof(aos_sb));
@@ -135,7 +136,6 @@ int main(int argc, char *argv[])
     }
 
     /* Configure Data blocks */
-    nblocks -= (1 + ino_blocks);
     if(build_data_blocks(fd, nblocks) == -1){
         close(fd);
         //free(block_padding);

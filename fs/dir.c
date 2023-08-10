@@ -66,7 +66,7 @@ static int aos_iterate(struct file *file, struct dir_context* ctx) {
     return 0;
 }
 
-const struct file_operations aos_dops = {
+const struct file_operations aos_dir_ops = {
     .owner = THIS_MODULE,
     .iterate = aos_iterate
 };

@@ -1,4 +1,3 @@
-#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/timekeeping.h>
@@ -7,7 +6,6 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <linux/version.h>
 
 #include "include/aos_fs.h"
 
@@ -23,16 +21,19 @@
  * Opens a file by creating a new file object and linking it to the corresponding inode object
  * */
 int aos_open(struct inode *inode, struct file *filp){
-    // todo: check for driver-specific errors -> device is mounted
-    // todo: initialize the device if it's being opened for the first time
-    // todo: update the f_op pointer
-    // todo: allocate and fill any data structure to be put in filp->private_data
+    aos_fs_info_t *info;
+    struct aos_inode *aos_inode;
 
-    // this device file is single instance
-    if (!mutex_trylock(&device_state)) return -EBUSY;
+    info = inode->i_sb->s_fs_info;
+    if (!info->is_mounted) return -ENODEV;
+
+    /* check permission */
+    if (filp->f_flags & FMODE_WRITE) // todo: do something
+
+    atomic_inc(&scull_s_available);
 
     printk("%s: device file successfully opened by thread %d\n", MODNAME, current->pid);
-    // device opened by a default nop
+
     return 0;
 }
 
@@ -41,10 +42,10 @@ int aos_open(struct inode *inode, struct file *filp){
  * that is, when the f_count field of the file object becomes 0.
  * */
 int aos_release(struct inode *inode, struct file *filp){
-    mutex_unlock(&device_state);
+
 
     printk("%s: device file closed by thread %d\n",MODNAME, current->pid);
-    // device closed by default nop
+
     return 0;
 }
 
@@ -58,7 +59,7 @@ int aos_release(struct inode *inode, struct file *filp){
  * // todo: check if device is mounted
  * */
 ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
-    /* Default read operation as seen in singlefilefs */
+
     struct buffer_head *bh = NULL;
     struct inode * the_inode = filp->f_inode;
     uint64_t file_size = the_inode->i_size;
@@ -66,16 +67,18 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     loff_t offset;
     int block_to_read;  //index of the block to be read from device
 
-    printk("%s: read operation called with len %ld - and offset %lld (the current file size is %lld)", MODNAME, count,
-           *f_pos, file_size);
+    aos_fs_info_t *info = the_inode->i_sb->s_fs_info;
+    if(!info->is_mounted) return -ENODEV;
 
-    // checkme: add synchronization on f_pos (it can be changed concurrently) if you need it for any reason
+    printk("%s: read operation called with len %ld and offset %lld (the current file size is %lld)",
+           MODNAME, count, *f_pos, file_size);
 
-    // check that *f_pos is within boundaries
-    if (*f_pos >= file_size)
-        return 0;
-    else if (*f_pos + count > file_size)
-        count = file_size - *f_pos;
+    // check boundaries
+    if (*f_pos >= file_size) {
+        return 0;   // specified offset is over file size
+    }else if (*f_pos + count > file_size) {
+        count = file_size - *f_pos; // number of bytes requested are over file size: trim count
+    }
 
     // determine the block level offset for the operation
     offset = *f_pos % AOS_BLOCK_SIZE;
@@ -83,7 +86,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     if (offset + count > AOS_BLOCK_SIZE) count = AOS_BLOCK_SIZE - offset;
 
     // compute the actual index of the block to be read from device
-    block_to_read = *f_pos / AOS_BLOCK_SIZE + 2; //the value 2 accounts for superblock and file-inode on device
+    block_to_read = (*f_pos / AOS_BLOCK_SIZE) + 1 + ; //the value 2 accounts for superblock and file-inode on device
 
     printk("%s: read operation must access block %d of the device", MODNAME, block_to_read);
 
@@ -99,60 +102,57 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 
 /*
  * Searches a directory for an inode corresponding to the filename included in a dentry object.
- * (Default inode management as seen in singlefilefs)
  * */
 static struct dentry *aos_lookup(struct inode *parent_inode, struct dentry *dentry, unsigned int flags){
-    struct aos_inode *FS_specific_inode;
+    struct aos_inode *aos_inode;
     struct super_block *sb = parent_inode->i_sb;
     struct buffer_head *bh = NULL;
-    struct inode *the_inode = NULL;
+    struct inode *inode = NULL;
 
     printk("%s: running the lookup inode-function for name %s", MODNAME, dentry->d_name.name);
 
-    if(!strcmp(dentry->d_name.name, DEVICE_NAME)){
-        // get a locked inode from the cache
-        the_inode = iget_locked(sb, 1);
-        if (!the_inode) return ERR_PTR(-ENOMEM);
+    if (strcmp(dentry->d_name.name, DEVICE_NAME)) return NULL;
 
-        // already cached inode - simply return successfully
-        if(!(the_inode->i_state & I_NEW)) return dentry;
+    // get a locked inode from the cache
+    inode = iget_locked(sb, 1);
+    if (!inode) return ERR_PTR(-ENOMEM);
 
-        // new VFS inode
-        inode_init_owner(the_inode, NULL, S_IFREG);
-        the_inode->i_mode = (S_IFREG | S_IRUSR | S_IRGRP | S_IROTH | S_IWUSR | S_IWGRP | S_IXUSR | S_IXGRP | S_IXOTH);
-        the_inode->i_fop = &aos_fops;
-        the_inode->i_op = &aos_iops;
+    // already cached inode - simply return successfully
+    if(!(inode->i_state & I_NEW)) return dentry;
 
-        // just one link for this file
-        set_nlink(the_inode,1);
+    // new VFS inode for a regular file
+    inode_init_owner(inode, NULL, S_IFREG);
+    inode->i_mode = (S_IFREG | S_IRWXU | S_IROTH | S_IXOTH);
+    inode->i_fop = &aos_file_ops;
+    inode->i_op = &aos_inode_ops;
 
-        // retrieve the file size via the FS specific inode, putting it into the generic inode
-        bh = (struct buffer_head *)sb_bread(sb, INODE_BLOCK_IDX);
-        if(!bh){
-            iput(the_inode);
-            return ERR_PTR(-EIO);
-        }
-        FS_specific_inode = (struct aos_inode*)bh->b_data;
-        the_inode->i_size = FS_specific_inode->file_size;
-        brelse(bh);
+    // just one link for this file
+    set_nlink(inode, 1);
 
-        d_add(dentry, the_inode);
-        dget(dentry);
-
-        //unlock the inode to make it usable
-        unlock_new_inode(the_inode);
-
-        return dentry;
+    // retrieve the file size via the FS specific inode, putting it into the generic inode
+    bh = (struct buffer_head *)sb_bread(sb, INODE_BLOCK_IDX);
+    if(!bh){
+        iput(inode);
+        return ERR_PTR(-EIO);
     }
+    aos_inode = (struct aos_inode*)bh->b_data;
+    inode->i_size = aos_inode->file_size;
+    brelse(bh);
 
-    return NULL;
+    d_add(dentry, inode);
+    dget(dentry);
+
+    //unlock the inode to make it usable
+    unlock_new_inode(inode);
+
+    return dentry;
 }
 
-const struct inode_operations aos_iops = {
+const struct inode_operations aos_inode_ops = {
     .lookup = aos_lookup
 };
 
-const struct file_operations aos_fops = {
+const struct file_operations aos_file_ops = {
     .owner = THIS_MODULE,
     .open = aos_open,
     .release = aos_release,

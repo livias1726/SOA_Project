@@ -8,7 +8,7 @@
 #define AOS_BLOCK_SIZE 4096
 #define SUPER_BLOCK_IDX 0
 #define INODE_BLOCK_IDX 1
-#define INODE_BLOCK_RATIO 0.10      // percentage of NBLOCKS reserved for inodes
+//#define INODE_BLOCK_RATIO 0.10      // percentage of NBLOCKS reserved for inodes
 
 #define FILENAME_MAXLEN 255
 #define ROOT_INODE_NUMBER 1
@@ -24,13 +24,12 @@ struct aos_super_block {
     uint64_t block_size;        /* Block size in bytes */
     uint64_t partition_size;    /* Number of blocks in the file system */
     uint64_t inode_blocks;      /* Number of blocks reserved for the inodes */
-    uint64_t data_blocks;
+    uint64_t data_blocks;       /* Number of blocks used as data blocks */
     uint64_t inodes_count;      /* Number of inodes supported by the file system */
-    uint64_t free_inodes;       /* Bit vector to represent the state of each inode */
-    uint64_t free_blocks;       /* Bit vector to represent the state of each data block */
+    uintptr_t *free_blocks;     /* Pointer to a bitmap to represent the state of each data block */
 
     // padding to fit into a single (first) block
-    char padding[AOS_BLOCK_SIZE - (8 * sizeof(uint64_t))];
+    char padding[AOS_BLOCK_SIZE - (6 * sizeof(uint64_t) + sizeof(uintptr_t *))];
 };
 
 /* inode definition */
@@ -43,8 +42,6 @@ struct aos_inode {
         uint64_t file_size;             /* File size in bytes */
         uint64_t dir_children_count;    /* or dir size in number of files */
     };
-    struct inode_operations * i_op;     /* inode operations */
-    struct file_operations * i_fop;     /* Default file operations */
 };
 
 // entries of a directory data block
@@ -59,7 +56,6 @@ struct aos_db_metadata{
     uint8_t is_empty;
     uint16_t available_space;       /* in bytes */
     uint64_t inode_no;
-    char filename[FILENAME_MAXLEN];
 };
 
 struct aos_db_userdata{
@@ -78,9 +74,9 @@ typedef struct aos_fs_info {
     uint8_t is_mounted;
 } aos_fs_info_t;
 
-extern const struct inode_operations aos_iops;
-extern const struct file_operations aos_fops;
-extern const struct file_operations aos_dops;
+extern const struct inode_operations aos_inode_ops;
+extern const struct file_operations aos_file_ops;
+extern const struct file_operations aos_dir_ops;
 extern struct file_system_type aos_fs_type;
 
 #endif //SOA_PROJECT_AOS_FS_H
