@@ -18,14 +18,14 @@
 
 static int build_superblock(int fd, int nblocks){
     ssize_t ret;
-    int ino_blocks = ROUND_UP(nblocks * sizeof(struct aos_inode), AOS_BLOCK_SIZE);
+    int ino_blocks = ROUND_UP(sizeof(struct aos_inode), AOS_BLOCK_SIZE);
 
     struct aos_super_block aos_sb = {
             .magic = MAGIC,
             .block_size = AOS_BLOCK_SIZE,
             .partition_size = nblocks+ino_blocks+1,
             .inode_blocks = ino_blocks,
-            .inodes_count = nblocks,
+            .inodes_count = 1,
             .data_blocks = nblocks
     };
 
@@ -44,8 +44,8 @@ static int build_inode(int fd, char **padding, int nblocks){
     int nbytes;
 
     struct aos_inode root_inode = {
-            .mode = S_IFDIR,
-            .inode_no = ROOT_INODE_NUMBER,
+            .mode = S_IFREG,
+            .inode_no = FILE_INODE_NUMBER,
             .data_block_number = nblocks + 1       // superblock + inode blocks
     };
 
@@ -56,7 +56,7 @@ static int build_inode(int fd, char **padding, int nblocks){
     }
 
     // reserve memory for each inode block
-    nbytes = (AOS_BLOCK_SIZE * nblocks) - sizeof(root_inode);
+    nbytes = AOS_BLOCK_SIZE - sizeof(root_inode);
     *padding = malloc(nbytes);
     if(!*padding) {
         perror("Malloc failed");
@@ -76,19 +76,24 @@ static int build_inode(int fd, char **padding, int nblocks){
 
 int build_data_blocks(int fd, int nblocks){
     ssize_t ret;
-    struct aos_data_block *aos_block;
     int i;
 
+    struct aos_db_metadata metadata = {
+            .is_empty = 1,
+            .available_space = sizeof(struct aos_db_userdata)
+    };
+
+    struct aos_db_userdata data = {
+            .msg = 0,
+    };
+
+    struct aos_data_block block = {
+            .metadata = metadata,
+            .data = data,
+    };
+
     for (i = 0; i < nblocks; ++i) {
-        aos_block = calloc(1,sizeof(aos_block));
-        if (!aos_block){
-            perror("Malloc failed");
-            return -1;
-        }
-
-        aos_block->metadata.is_empty = 1;
-
-        ret = write(fd, aos_block, sizeof(struct aos_data_block));
+        ret = write(fd, &block, sizeof(block));
         if (ret != AOS_BLOCK_SIZE){
             printf("DB: Bytes written [%d] are not equal to the default block size.\n", (int)ret);
             return -1;

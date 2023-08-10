@@ -11,7 +11,8 @@
 //#define INODE_BLOCK_RATIO 0.10      // percentage of NBLOCKS reserved for inodes
 
 #define FILENAME_MAXLEN 255
-#define ROOT_INODE_NUMBER 1
+#define ROOT_INODE_NUMBER 10
+#define FILE_INODE_NUMBER 1
 
 #define DEVICE_NAME "the-device"
 #define MODNAME "AOS_FS"
@@ -52,10 +53,9 @@ struct aos_dir_record {
 
 /* Data block definition */
 struct aos_db_metadata{
-    uint8_t is_valid;
     uint8_t is_empty;
+    uint8_t is_valid;
     uint16_t available_space;       /* in bytes */
-    uint64_t inode_no;
 };
 
 struct aos_db_userdata{

@@ -76,6 +76,7 @@ int print_data_blocks(int fd, int nblocks){
         }
         printf("Data block [%d]: \n", i);
         printf("\tis empty: %u\n", aos_block.metadata.is_empty);
+        printf("\tavailable bytes: %u\n", aos_block.metadata.available_space);
     }
 
     return 0;
