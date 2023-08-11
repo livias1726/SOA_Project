@@ -4,9 +4,11 @@
 #include <linux/version.h>          /* Retrieve and format the current Linux kernel version */
 #include <linux/syscalls.h>
 #include <linux/slab.h>
+#include <linux/buffer_head.h>
 #include "lib/include/scth.h"
 
 #include "include/config.h"
+#include "fs/include/aos_fs.h"
 
 unsigned long the_syscall_table = 0x0;
 module_param(the_syscall_table, ulong, 0660);
@@ -16,8 +18,6 @@ unsigned long the_ni_syscall;
 unsigned long new_sys_call_array[] = {0x0, 0x0, 0x0};   //please set to sys_vtpmo at startup
 #define HACKED_ENTRIES (int)(sizeof(new_sys_call_array)/sizeof(unsigned long))
 int restore[HACKED_ENTRIES] = {[0 ... (HACKED_ENTRIES-1)] -1};
-
-/* When the device is not mounted, the system calls should return with the ENODEV error */
 
 /**
  * Put into one free block of the block-device 'size' bytes of the user-space data identified by the 'source' pointer.
@@ -30,17 +30,98 @@ __SYSCALL_DEFINEx(2, _put_data, char *, source, size_t, size){
 #else
 asmlinkage int sys_put_data(char * source, size_t size){
 #endif
+    aos_fs_info_t *aos_info;
+    struct aos_super_block* aos_sb;
+    uint64_t* free_map;
+    uint64_t nblocks;
+    struct aos_data_block *data_block;
     uint32_t block_index = -1;
+    char * msg;
+    size_t ret;
+    int i, j, fail;
+    struct super_block *sb;
+    struct buffer_head *bh;
+    struct aos_data_block *block;
 
-    // todo: check if device is mounted -> if not return ENODEV
+    // start of operations on the device
+    aos_info = get_fs_info();
+    __atomic_fetch_add(&aos_info->count, 1, __ATOMIC_SEQ_CST);
 
-    // todo: find a free block -> if not available return ENOMEM
+    // check if device is mounted
+    if (!aos_info->is_mounted) { // checkme: try to check if mount status can be detected from sb_bread
+        fail = -ENODEV;
+        goto put_failure;
+    }
 
-    //todo: check if a free block has enough space to write 'size' bytes -> if not return ENOMEM
+    // check legal size
+    if (size >= sizeof(struct aos_data_block)) {
+        fail = -EINVAL;
+        goto put_failure;
+    }
 
-    //todo: write data in 'source' for 'size' bytes in the offset of the free block retrieved
+    // find a free block
+    spin_lock(&(aos_info->fs_lock));    // lock the free blocks bitmap
 
+    aos_sb = aos_info->sb;
+    free_map = aos_info->free_blocks;
+    nblocks = aos_sb->partition_size;
+    for (i = 0; i < nblocks; i+=64) { // scan 64 bit at a time
+        if ((*free_map & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
+            free_map++;
+            continue;
+        }
+
+        // found bit block with a bit unset
+        for (j = 0; j < 64; ++j) {
+            if (TEST_BIT(free_map, j)) {
+                block_index = i + j;
+                break;
+            }
+        }
+        break;
+    }
+
+    if(block_index == -1) {
+        fail = -ENOMEM;
+        goto put_failure;
+    }
+
+    SET_BIT(aos_info->free_blocks, block_index);
+    spin_unlock(&(aos_info->fs_lock));  // unlock the free blocks bitmap
+
+    // alloc area to retrieve message from user
+    msg = kzalloc(size, GFP_KERNEL);
+    if (!msg) {
+        fail = -ENOMEM;
+        goto put_failure;
+    }
+    ret = copy_from_user(msg, source, size);
+    size -= ret;
+    msg[size+1] = '\0';
+
+    sb = fs_info.vfs_sb;
+
+    // get data block in page cache buffer
+    bh = sb_bread(sb, block_index);
+    if(!bh) {
+        fail = -EIO;
+        goto put_failure;
+    }
+
+    // write data on the free block
+    memcpy(bh->b_data, msg, size);
+    mark_buffer_dirty(bh);
+#ifdef WB
+    sync_dirty_buffer(bh); // immediate synchronous write on the device
+#endif
+    brelse(bh);
+
+    __atomic_fetch_sub(&aos_info->count, 1, __ATOMIC_SEQ_CST);
     return block_index;
+
+put_failure:
+    __atomic_fetch_sub(&aos_info->count, 1, __ATOMIC_SEQ_CST);
+    return fail;
 }
 
 /**
@@ -82,6 +163,7 @@ asmlinkage int sys_invalidate_data(uint64_t offset){
     // todo: check if the block that contains 'offset' has valid data -> if not return ENODATA
 
     // todo: invalidate data at 'offset'
+    //  - set invalid block as free
 
     return 0;
 }

@@ -4,15 +4,19 @@
 #include <linux/fs.h>
 #include <linux/types.h>
 
-#define MAGIC 0x42424242            // file system magic number
+#define MAGIC 0x42424242
 #define AOS_BLOCK_SIZE 4096
 #define SUPER_BLOCK_IDX 0
 #define INODE_BLOCK_IDX 1
-//#define INODE_BLOCK_RATIO 0.10      // percentage of NBLOCKS reserved for inodes
-
 #define FILENAME_MAXLEN 255
 #define ROOT_INODE_NUMBER 10
 #define FILE_INODE_NUMBER 1
+#define FULL_MAP_ENTRY 0xffffffffffffffff
+
+#define SET_BIT(map,k) map[(k)/64] |= (1 << ((k)%64))
+#define CLEAR_BIT(map,k) map[(k)/64] &= ~(1 << ((k)%64))
+#define TEST_BIT(map,k) map[(k)/64] & (1 << ((k)%64))
+#define ROUND_UP(a,b) (a+b-1)/b
 
 #define DEVICE_NAME "the-device"
 #define MODNAME "AOS_FS"
@@ -24,21 +28,15 @@ struct aos_super_block {
     uint64_t magic;             /* Magic number to identify the file system */
     uint64_t block_size;        /* Block size in bytes */
     uint64_t partition_size;    /* Number of blocks in the file system */
-    uint64_t inode_blocks;      /* Number of blocks reserved for the inodes */
-    uint64_t data_blocks;       /* Number of blocks used as data blocks */
-    uint64_t inodes_count;      /* Number of inodes supported by the file system */
-    uintptr_t *free_blocks;     /* Pointer to a bitmap to represent the state of each data block */
 
     // padding to fit into a single (first) block
-    char padding[AOS_BLOCK_SIZE - (6 * sizeof(uint64_t) + sizeof(uintptr_t *))];
+    char padding[AOS_BLOCK_SIZE - ((3 * sizeof(uint64_t)) + sizeof(uint64_t*))];
 };
 
 /* inode definition */
 struct aos_inode {
     mode_t mode;                        /* File type and access rights */
     uint64_t inode_no;                  /* inode number */
-    uint64_t data_block_number;         /* Data block number */
-    uint64_t i_count;                   /* Usage counter */
     union {
         uint64_t file_size;             /* File size in bytes */
         uint64_t dir_children_count;    /* or dir size in number of files */
@@ -51,11 +49,16 @@ struct aos_dir_record {
     uint64_t inode_no;
 };
 
-/* Data block definition */
+/* Data block definition:
+ *  - Metadata:
+ *      - is_empty          (1 bit)
+ *      - is_valid          (1 bit)
+ *      - available space   (max 12 bit)
+ *      - counter           (64 bit)
+ * */
 struct aos_db_metadata{
-    uint8_t is_empty;
     uint8_t is_valid;
-    uint16_t available_space;       /* in bytes */
+    uint64_t count;
 };
 
 struct aos_db_userdata{
@@ -72,11 +75,19 @@ typedef struct aos_fs_info {
     struct super_block *vfs_sb;     /* VFS super block structure */
     struct aos_super_block *sb;      /* AOS super block structure */
     uint8_t is_mounted;
+    uint64_t count;             /* counter of threads currently operating on the device */
+    uint64_t* free_blocks;      /* Pointer to a bitmap to represent the state of each data block */
+    spinlock_t fs_lock;
 } aos_fs_info_t;
 
 extern const struct inode_operations aos_inode_ops;
 extern const struct file_operations aos_file_ops;
 extern const struct file_operations aos_dir_ops;
 extern struct file_system_type aos_fs_type;
+
+static aos_fs_info_t fs_info;
+
+aos_fs_info_t* get_fs_info();
+struct aos_data_block* get_data_block(int);
 
 #endif //SOA_PROJECT_AOS_FS_H

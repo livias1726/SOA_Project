@@ -1,0 +1,6 @@
+#ifndef SOA_PROJECT_USER_H
+#define SOA_PROJECT_USER_H
+
+
+
+#endif //SOA_PROJECT_USER_H

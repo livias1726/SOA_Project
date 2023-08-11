@@ -7,7 +7,7 @@
 
 #include "include/aos_fs.h"
 
-int print_superblock(int fd, int* i_blocks, int* d_blocks){
+int print_superblock(int fd, int *d_blocks){
     ssize_t ret;
     struct aos_super_block aos_sb;
 
@@ -21,17 +21,12 @@ int print_superblock(int fd, int* i_blocks, int* d_blocks){
     printf("\tmagic: %lx\n", aos_sb.magic);
     printf("\tblock size: %lu\n", aos_sb.block_size);
     printf("\tpartition size: %lu\n", aos_sb.partition_size);
-    printf("\tinode blocks: %lu\n", aos_sb.inode_blocks);
-    printf("\tdata blocks: %lu\n", aos_sb.data_blocks);
-    printf("\tinodes count: %lu\n", aos_sb.inodes_count);
 
-    *i_blocks = aos_sb.inode_blocks;
-    *d_blocks = aos_sb.data_blocks;
-
+    *d_blocks = aos_sb.partition_size-2;
     return 0;
 }
 
-int print_inode(int fd, int nblocks){
+int print_inode(int fd){
     ssize_t ret;
     int nbytes;
     char *padding;
@@ -46,9 +41,8 @@ int print_inode(int fd, int nblocks){
     printf("Root inode: \n");
     printf("\tprivileges: %u\n", root_inode.mode);
     printf("\tinode number: %lu\n", root_inode.inode_no);
-    printf("\tdata block number: %lu\n", root_inode.data_block_number);
 
-    nbytes = (AOS_BLOCK_SIZE * nblocks) - sizeof(root_inode);
+    nbytes = AOS_BLOCK_SIZE - sizeof(root_inode);
     padding = malloc(nbytes);
     if(!padding) {
         perror("Malloc failed");
@@ -75,8 +69,7 @@ int print_data_blocks(int fd, int nblocks){
             return -1;
         }
         printf("Data block [%d]: \n", i);
-        printf("\tis empty: %u\n", aos_block.metadata.is_empty);
-        printf("\tavailable bytes: %u\n", aos_block.metadata.available_space);
+        printf("\tis valid: %u\n", aos_block.metadata.is_valid);
     }
 
     return 0;
@@ -84,7 +77,7 @@ int print_data_blocks(int fd, int nblocks){
 
 int main(int argc, char *argv[])
 {
-    int fd, i_blocks, d_blocks;
+    int fd, d_blocks;
 
     if (argc != 2) {
         printf("Usage: debug_fs <device>\n");
@@ -97,12 +90,12 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if(print_superblock(fd, &i_blocks, &d_blocks) == -1) {
+    if(print_superblock(fd, &d_blocks) == -1) {
         close(fd);
         return EXIT_FAILURE;
     }
 
-    if(print_inode(fd, i_blocks) == -1){
+    if(print_inode(fd) == -1){
         close(fd);
         return EXIT_FAILURE;
     }

@@ -6,8 +6,6 @@
 #include <stdlib.h>
 
 #include "include/aos_fs.h"
-#define ROUND_UP(a,b) (a + b - 1) / b
-
 
 /*
  * This user-level software will write the following information onto the disk
@@ -18,15 +16,11 @@
 
 static int build_superblock(int fd, int nblocks){
     ssize_t ret;
-    int ino_blocks = ROUND_UP(sizeof(struct aos_inode), AOS_BLOCK_SIZE);
 
     struct aos_super_block aos_sb = {
             .magic = MAGIC,
             .block_size = AOS_BLOCK_SIZE,
-            .partition_size = nblocks+ino_blocks+1,
-            .inode_blocks = ino_blocks,
-            .inodes_count = 1,
-            .data_blocks = nblocks
+            .partition_size = nblocks+2,
     };
 
     ret = write(fd, (char *)&aos_sb, sizeof(aos_sb));
@@ -36,17 +30,16 @@ static int build_superblock(int fd, int nblocks){
     }
 
     printf("Superblock written successfully\n");
-    return ino_blocks;
+    return 0;
 }
 
-static int build_inode(int fd, char **padding, int nblocks){
+static int build_inode(int fd, char **padding){
     ssize_t ret;
     int nbytes;
 
     struct aos_inode root_inode = {
             .mode = S_IFREG,
-            .inode_no = FILE_INODE_NUMBER,
-            .data_block_number = nblocks + 1       // superblock + inode blocks
+            .inode_no = FILE_INODE_NUMBER
     };
 
     ret = write(fd, (char *)&root_inode, sizeof(root_inode));
@@ -78,15 +71,8 @@ int build_data_blocks(int fd, int nblocks){
     ssize_t ret;
     int i;
 
-    struct aos_db_metadata metadata = {
-            .is_empty = 1,
-            .available_space = sizeof(struct aos_db_userdata)
-    };
-
-    struct aos_db_userdata data = {
-            .msg = 0,
-    };
-
+    struct aos_db_metadata metadata = { 0 };
+    struct aos_db_userdata data = { 0 };
     struct aos_data_block block = {
             .metadata = metadata,
             .data = data,
@@ -107,46 +93,42 @@ int main(int argc, char *argv[])
 {
     int fd, nblocks;
     char *block_padding;
-    int ino_blocks;
 
     if (argc != 3) {
         printf("Usage: format_fs <device> <NBLOCKS>\n");
-        return EXIT_FAILURE;
+        goto failure_1;
     }
 
     /* Open the device */
     if ((fd = open(argv[1], O_RDWR)) == -1) {
         perror("Error opening the device");
-        return EXIT_FAILURE;
+        goto failure_1;
     }
 
     /* Retrieve NBLOCKS */
     if ((nblocks = atoi(argv[2])) < 1){
         printf("NBLOCKS must be at least 1\n");
-        close(fd);
-        return EXIT_FAILURE;
+        goto failure_2;
     }
 
     /* Configure the superblock in a single disk block */
-    ino_blocks = build_superblock(fd, nblocks);
-    if(ino_blocks == -1) {
-        close(fd);
-        return EXIT_FAILURE;
-    }
+    if(build_superblock(fd, nblocks)) goto failure_2;
 
     /* Configure the Inode blocks */
-    if(build_inode(fd, &block_padding, ino_blocks) == -1){
-        close(fd);
-        return EXIT_FAILURE;
-    }
+    if(build_inode(fd, &block_padding)) goto failure_2;
 
     /* Configure Data blocks */
-    if(build_data_blocks(fd, nblocks) == -1){
-        close(fd);
-        //free(block_padding);
-        return EXIT_FAILURE;
-    }
+    if(build_data_blocks(fd, nblocks)) goto failure_3;
 
     close(fd);
     return 0;
+
+failure_3:
+    free(block_padding);
+
+failure_2:
+    close(fd);
+
+failure_1:
+    return EXIT_FAILURE;
 }

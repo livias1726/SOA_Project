@@ -18,7 +18,7 @@
  */
 
 /*
- * Opens a file by creating a new file object and linking it to the corresponding inode object
+ * Opens the device
  * */
 int aos_open(struct inode *inode, struct file *filp){
     aos_fs_info_t *info;
@@ -27,10 +27,8 @@ int aos_open(struct inode *inode, struct file *filp){
     info = inode->i_sb->s_fs_info;
     if (!info->is_mounted) return -ENODEV;
 
-    /* check permission */
-    if (filp->f_flags & FMODE_WRITE) // todo: do something
-
-    atomic_inc(&scull_s_available);
+    /* todo: check permission */
+    //if (filp->f_flags & FMODE_WRITE)
 
     printk("%s: device file successfully opened by thread %d\n", MODNAME, current->pid);
 
@@ -55,8 +53,6 @@ int aos_release(struct inode *inode, struct file *filp){
  *
  * A read operation should only return data related to messages not invalidated
  * before the access in read mode to the corresponding block of the device in an I/O session.
- *
- * // todo: check if device is mounted
  * */
 ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 
@@ -86,7 +82,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     if (offset + count > AOS_BLOCK_SIZE) count = AOS_BLOCK_SIZE - offset;
 
     // compute the actual index of the block to be read from device
-    block_to_read = (*f_pos / AOS_BLOCK_SIZE) + 1 + ; //the value 2 accounts for superblock and file-inode on device
+    block_to_read = (*f_pos / AOS_BLOCK_SIZE) + 2; //the value 2 accounts for superblock and file-inode on device
 
     printk("%s: read operation must access block %d of the device", MODNAME, block_to_read);
 
@@ -114,7 +110,7 @@ static struct dentry *aos_lookup(struct inode *parent_inode, struct dentry *dent
     if (strcmp(dentry->d_name.name, DEVICE_NAME)) return NULL;
 
     // get a locked inode from the cache
-    inode = iget_locked(sb, 1);
+    inode = iget_locked(sb, INODE_BLOCK_IDX);
     if (!inode) return ERR_PTR(-ENOMEM);
 
     // already cached inode - simply return successfully

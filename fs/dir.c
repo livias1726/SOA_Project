@@ -14,34 +14,8 @@
  * */
 static int aos_iterate(struct file *file, struct dir_context* ctx) {
 
-    aos_fs_info_t *fs_info;
-    struct aos_inode inode;
-    loff_t pos;
-    int i;
-    int ret;
-
-    /*
-    // current directory
-    if (ctx->pos == 0){
-        if(!dir_emit(ctx, ".", FILENAME_MAXLEN, ROOT_INODE_NUMBER, DT_UNKNOWN)){
-            return 0;
-        } else{
-            ctx->pos++;
-        }
-    }
-
-    // parent directory
-    if (ctx->pos == 1){
-        if(!dir_emit(ctx,"..", FILENAME_MAXLEN, 1, DT_UNKNOWN)){
-            return 0;
-        } else {
-            ctx->pos++;
-        }
-    }
-     */
     if (!dir_emit_dots(file, ctx)) return -ENOSPC;
 
-    /*
     // file
     if (ctx->pos == 2){
         if(!dir_emit(ctx, DEVICE_NAME, FILENAME_MAXLEN, FILE_INODE_NUMBER, DT_UNKNOWN)){
@@ -49,19 +23,6 @@ static int aos_iterate(struct file *file, struct dir_context* ctx) {
         } else{
             ctx->pos++;
         }
-    }
-    return 0;
-     */
-    fs_info = file->f_inode->i_sb->s_fs_info;
-    pos = 1;
-    for (i = 0; i < fs_info->sb->inodes_count; ++i){
-        if (!(fs_info->sb->free_blocks >> i)) continue;
-        pos++;
-        if (ctx->pos == pos){
-            if (!dir_emit(ctx, "", FILENAME_MAXLEN, file->f_inode->i_ino, DT_UNKNOWN)) return -ENOSPC;
-            ctx->pos++;
-        }
-
     }
     return 0;
 }
