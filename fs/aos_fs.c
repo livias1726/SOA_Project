@@ -12,10 +12,6 @@
  * It is assumed that the device driver can support a single mount at a time.
  * */
 
-aos_fs_info_t* get_fs_info(){
-    return &fs_info;
-}
-
 static struct super_operations aos_sb_ops = {
 };
 
@@ -26,7 +22,9 @@ static int init_fs_info(aos_fs_info_t *info, struct aos_super_block* aos_sb) {
     // build free blocks bitmap as an array of uint64_t
     int nblocks = aos_sb->partition_size;
     int nll = ROUND_UP(nblocks, 64); // number of uint64_t needed to represent nblocks
-    info->free_blocks = kzalloc(nll/8, GFP_KERNEL);
+    int nll_bytes = ROUND_UP(nll, 8);
+
+    info->free_blocks = kzalloc(nll_bytes, GFP_KERNEL);
     if (!info->free_blocks) return -ENOMEM;
 
     // set first two blocks as used (superblock and inode block)
@@ -35,8 +33,6 @@ static int init_fs_info(aos_fs_info_t *info, struct aos_super_block* aos_sb) {
 
     info->sb = aos_sb;
     info->vfs_sb->s_fs_info = info;
-
-    spin_lock_init(&(info->fs_lock));
 
     return 0;
 }
@@ -51,45 +47,63 @@ static int init_fs_info(aos_fs_info_t *info, struct aos_super_block* aos_sb) {
 static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 
     aos_fs_info_t *info;
-    struct aos_super_block *aos_sb;
+    struct aos_super_block aos_sb;
     struct inode *root_inode;
     struct buffer_head *bh;
     struct timespec64 curr_time;
-    uint64_t magic;
-    int ret;
 
-    /* Read VFS superblock */
-    sb->s_magic = MAGIC;
+    /* Set block size */
+    if(!sb_set_blocksize(sb, AOS_BLOCK_SIZE)) {
+        printk(KERN_ALERT "%s: [aos_fill_super()] couldn't set the block size in the vfs superblock\n", MODNAME);
+        return -EIO;
+    }
+
+    /* Read superblock */
     bh = sb_bread(sb, SUPER_BLOCK_IDX);
     if(!bh) {
-        ret = -EIO;
-        goto fill_fail_1;
+        printk(KERN_ALERT "%s: [aos_fill_super()] couldn't read the vfs superblock\n", MODNAME);
+        return -EIO;
     }
-    aos_sb = (struct aos_super_block *)bh->b_data;
-    magic = aos_sb->magic;
+    memcpy(&aos_sb, bh->b_data, AOS_BLOCK_SIZE);
     brelse(bh);
 
-    if(magic != sb->s_magic) {
-        ret = -EBADF;
-        goto fill_fail_1;
+    /* Check magic number */
+    if(aos_sb.magic != MAGIC) {
+        printk(KERN_ALERT "%s: [aos_fill_super()] incorrect magic number. abort mounting.\n", MODNAME);
+        return -EBADF;
     }
 
-    sb->s_type = &aos_fs_type; // file_system_type
-    sb->s_op = &aos_sb_ops; // super block operations
+    /* Fill superblock */
+    sb->s_magic = MAGIC;
+    sb->s_type = &aos_fs_type;
+    sb->s_op = &aos_sb_ops;
 
-    /* Prepare AOS FS info */
+    printk(KERN_ALERT "%s: init info\n", MODNAME);
+
+    /* Create AOS FS info */
     info = (aos_fs_info_t *)(kzalloc(sizeof(aos_fs_info_t), GFP_KERNEL));
     if (!info) {
-        ret = -ENOMEM;
-        goto fill_fail_1;
+        printk(KERN_ALERT "%s: [aos_fill_super()] couldn't allocate aos_fs_info structure\n", MODNAME);
+        return -ENOMEM;
     }
     info->vfs_sb = sb;
+    if(!init_fs_info(info, &aos_sb)) {
+        printk(KERN_ALERT "%s: [aos_fill_super()] couldn't initialize aos_fs_info structure\n", MODNAME);
+        kfree(info);
+        return -ENOMEM;
+    }
 
-    if(!init_fs_info(info, aos_sb)) goto fill_fail_2;
+    printk(KERN_ALERT "%s: init info OK\n", MODNAME);
 
-    // get a VFS inode for the root directory
+    printk(KERN_ALERT "%s: init inode\n", MODNAME);
+    /* Get a VFS inode for the root directory */
     root_inode = iget_locked(sb, SUPER_BLOCK_IDX);
-    if (!root_inode) goto fill_fail_3;
+    if (!root_inode) {
+        printk(KERN_ALERT "%s: [aos_fill_super()] couldn't lock the root inode\n", MODNAME);
+        kfree(info->free_blocks);
+        kfree(info);
+        return -ENOMEM;
+    }
 
     if (root_inode->i_state & I_NEW) { // created a new inode
         root_inode->i_ino = ROOT_INODE_NUMBER;
@@ -103,13 +117,18 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 
         // no inode from device is needed - the root of our file system is an in memory object
         root_inode->i_private = NULL;
-    }
 
+        printk(KERN_INFO "%s: built a new root inode.\n", MODNAME);
+    }
+    printk(KERN_ALERT "%s: init inode OK\n", MODNAME);
     /* Make the VFS superblock point to the dentry. */
     sb->s_root = d_make_root(root_inode);
     if (!sb->s_root) {
+        printk(KERN_ALERT "%s: [aos_fill_super()] couldn't set up the root dentry\n", MODNAME);
         iget_failed(root_inode);
-        goto fill_fail_3;
+        kfree(info->free_blocks);
+        kfree(info);
+        return -ENOMEM;
     }
     sb->s_root->d_op = &aos_de_ops;
 
@@ -119,15 +138,9 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     // unlock the inode to make it usable
     unlock_new_inode(root_inode);
 
-    return 0;
+    AUDIT { printk(KERN_INFO "%s: superblock fill function returned correctly.\n", MODNAME); }
 
-fill_fail_3:
-    kfree(info->free_blocks);
-fill_fail_2:
-    kfree(info);
-    ret = -ENOMEM;
-fill_fail_1:
-    return ret;
+    return 0;
 }
 
 static void aos_kill_superblock(struct super_block *sb){

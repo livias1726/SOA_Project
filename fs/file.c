@@ -22,7 +22,6 @@
  * */
 int aos_open(struct inode *inode, struct file *filp){
     aos_fs_info_t *info;
-    struct aos_inode *aos_inode;
 
     info = inode->i_sb->s_fs_info;
     if (!info->is_mounted) return -ENODEV;

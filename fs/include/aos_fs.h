@@ -19,9 +19,8 @@
 #define ROUND_UP(a,b) (a+b-1)/b
 
 #define DEVICE_NAME "the-device"
-#define MODNAME "AOS_FS"
-
-static DEFINE_MUTEX(device_state);  // used to prevent multiple access to the device
+#define MODNAME "AOS"
+#define AUDIT if(1)
 
 /* Superblock definition */
 struct aos_super_block {
@@ -30,7 +29,7 @@ struct aos_super_block {
     uint64_t partition_size;    /* Number of blocks in the file system */
 
     // padding to fit into a single (first) block
-    char padding[AOS_BLOCK_SIZE - ((3 * sizeof(uint64_t)) + sizeof(uint64_t*))];
+    char padding[AOS_BLOCK_SIZE - (3 * sizeof(uint64_t))];
 };
 
 /* inode definition */
@@ -49,16 +48,9 @@ struct aos_dir_record {
     uint64_t inode_no;
 };
 
-/* Data block definition:
- *  - Metadata:
- *      - is_empty          (1 bit)
- *      - is_valid          (1 bit)
- *      - available space   (max 12 bit)
- *      - counter           (64 bit)
- * */
+/* Data block definition */
 struct aos_db_metadata{
     uint8_t is_valid;
-    uint64_t count;
 };
 
 struct aos_db_userdata{
@@ -75,9 +67,7 @@ typedef struct aos_fs_info {
     struct super_block *vfs_sb;     /* VFS super block structure */
     struct aos_super_block *sb;      /* AOS super block structure */
     uint8_t is_mounted;
-    uint64_t count;             /* counter of threads currently operating on the device */
     uint64_t* free_blocks;      /* Pointer to a bitmap to represent the state of each data block */
-    spinlock_t fs_lock;
 } aos_fs_info_t;
 
 extern const struct inode_operations aos_inode_ops;
@@ -86,8 +76,5 @@ extern const struct file_operations aos_dir_ops;
 extern struct file_system_type aos_fs_type;
 
 static aos_fs_info_t fs_info;
-
-aos_fs_info_t* get_fs_info();
-struct aos_data_block* get_data_block(int);
 
 #endif //SOA_PROJECT_AOS_FS_H

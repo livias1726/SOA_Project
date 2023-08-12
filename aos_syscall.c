@@ -34,16 +34,13 @@ asmlinkage int sys_put_data(char * source, size_t size){
     struct super_block *sb;
     struct buffer_head *bh;
     struct aos_super_block* aos_sb;
-    struct aos_data_block *data_block;
     uint64_t* free_map;
     uint64_t nblocks;
     int i, j, fail, block_index = -1;
     char * msg;
     size_t ret;
 
-    // start of operations on the device
-    aos_info = get_fs_info();
-    //__atomic_fetch_add(&aos_info->count, 1, __ATOMIC_SEQ_CST);
+    aos_info = &fs_info;
 
     // check if device is mounted
     if (!aos_info->is_mounted) { // checkme: try to check if mount status can be detected from sb_bread
@@ -58,8 +55,6 @@ asmlinkage int sys_put_data(char * source, size_t size){
     }
 
     // find a free block
-    spin_lock(&(aos_info->fs_lock));    // lock the free blocks bitmap
-
     aos_sb = aos_info->sb;
     free_map = aos_info->free_blocks;
     nblocks = aos_sb->partition_size;
@@ -85,7 +80,6 @@ asmlinkage int sys_put_data(char * source, size_t size){
     }
 
     SET_BIT(aos_info->free_blocks, block_index);
-    spin_unlock(&(aos_info->fs_lock));  // unlock the free blocks bitmap
 
     // alloc area to retrieve message from user
     msg = kzalloc(size, GFP_KERNEL);
@@ -114,11 +108,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     brelse(bh);
 
-    //__atomic_fetch_sub(&aos_info->count, 1, __ATOMIC_SEQ_CST);
     return block_index;
 
 put_failure:
-    //__atomic_fetch_sub(&aos_info->count, 1, __ATOMIC_SEQ_CST);
     return fail;
 }
 
@@ -142,7 +134,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     char * msg;
     size_t ret;
 
-    aos_info = get_fs_info();
+    aos_info = &fs_info;
     // check if device is mounted
     if (!aos_info->is_mounted) {
         fail = -ENODEV;
@@ -187,14 +179,45 @@ __SYSCALL_DEFINEx(1, _invalidate_data, uint64_t, offset){
 asmlinkage int sys_invalidate_data(uint64_t offset){
 #endif
 
-    // todo: check if device is mounted -> if not return ENODEV
+    aos_fs_info_t *aos_info;
+    struct super_block *sb;
+    struct buffer_head *bh;
+    struct aos_data_block *data_block;
+    int fail;
 
-    // todo: check if the block that contains 'offset' has valid data -> if not return ENODATA
+    aos_info = &fs_info;
+    // check if device is mounted
+    if (!aos_info->is_mounted) {
+        fail = -ENODEV;
+        goto inv_failure;
+    }
+    // check legal operation
+    if (offset < 2 || offset > aos_info->sb->partition_size) {
+        fail = -EINVAL;
+        goto inv_failure;
+    }
 
-    // todo: invalidate data at 'offset'
-    //  - set invalid block as free
+    // get data block in page cache buffer
+    sb = aos_info->vfs_sb;
+    bh = sb_bread(sb, offset);
+    if(!bh) {
+        fail = -EIO;
+        goto inv_failure;
+    }
+    data_block = (struct aos_data_block*)bh->b_data;
+
+    if (!data_block->metadata.is_valid) return -ENODATA; // no valid data
+
+    // invalidate data
+    data_block->metadata.is_valid = 0;
+
+    // set invalid block as free
+    CLEAR_BIT(aos_info->free_blocks, offset);
 
     return 0;
+
+inv_failure:
+    return fail;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
