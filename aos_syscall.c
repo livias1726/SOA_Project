@@ -31,21 +31,19 @@ __SYSCALL_DEFINEx(2, _put_data, char *, source, size_t, size){
 asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     aos_fs_info_t *aos_info;
-    struct aos_super_block* aos_sb;
-    uint64_t* free_map;
-    uint64_t nblocks;
-    struct aos_data_block *data_block;
-    uint32_t block_index = -1;
-    char * msg;
-    size_t ret;
-    int i, j, fail;
     struct super_block *sb;
     struct buffer_head *bh;
-    struct aos_data_block *block;
+    struct aos_super_block* aos_sb;
+    struct aos_data_block *data_block;
+    uint64_t* free_map;
+    uint64_t nblocks;
+    int i, j, fail, block_index = -1;
+    char * msg;
+    size_t ret;
 
     // start of operations on the device
     aos_info = get_fs_info();
-    __atomic_fetch_add(&aos_info->count, 1, __ATOMIC_SEQ_CST);
+    //__atomic_fetch_add(&aos_info->count, 1, __ATOMIC_SEQ_CST);
 
     // check if device is mounted
     if (!aos_info->is_mounted) { // checkme: try to check if mount status can be detected from sb_bread
@@ -99,7 +97,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     size -= ret;
     msg[size+1] = '\0';
 
-    sb = fs_info.vfs_sb;
+    sb = aos_info->vfs_sb;
 
     // get data block in page cache buffer
     bh = sb_bread(sb, block_index);
@@ -116,11 +114,11 @@ asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     brelse(bh);
 
-    __atomic_fetch_sub(&aos_info->count, 1, __ATOMIC_SEQ_CST);
+    //__atomic_fetch_sub(&aos_info->count, 1, __ATOMIC_SEQ_CST);
     return block_index;
 
 put_failure:
-    __atomic_fetch_sub(&aos_info->count, 1, __ATOMIC_SEQ_CST);
+    //__atomic_fetch_sub(&aos_info->count, 1, __ATOMIC_SEQ_CST);
     return fail;
 }
 
@@ -135,17 +133,48 @@ __SYSCALL_DEFINEx(3, _get_data, uint64_t, offset, char *, destination, size_t, s
 asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 #endif
 
-    uint32_t loaded_bytes = 0;
+    aos_fs_info_t *aos_info;
+    struct super_block *sb;
+    struct buffer_head *bh;
+    struct aos_super_block* aos_sb;
+    struct aos_data_block *data_block;
+    int fail, loaded_bytes;
+    char * msg;
+    size_t ret;
 
-    // todo: check if device is mounted -> if not return ENODEV
+    aos_info = get_fs_info();
+    // check if device is mounted
+    if (!aos_info->is_mounted) {
+        fail = -ENODEV;
+        goto get_failure;
+    }
+    // check legal operation
+    aos_sb = aos_info->sb;
+    if (offset < 2 || offset > aos_sb->partition_size || size < 0 || size > aos_sb->block_size) {
+        fail = -EINVAL;
+        goto get_failure;
+    }
 
-    // todo: if the block that contains 'offset' has no available data -> return 0
+    // get data block in page cache buffer
+    sb = aos_info->vfs_sb;
+    bh = sb_bread(sb, offset);
+    if(!bh) {
+        fail = -EIO;
+        goto get_failure;
+    }
+    data_block = (struct aos_data_block*)bh->b_data;
 
-    // todo: check if the block that contains 'offset' has valid data -> if not return ENODATA
+    msg = data_block->data.msg;
+    if (strlen(msg) == 0) return 0; // no available data
+    if (!data_block->metadata.is_valid) return -ENODATA; // no valid data
 
-    // todo: try to read 'size' bytes of data starting from 'offset' into 'destination' -> get num bytes read
-
+    // try to read 'size' bytes of data starting from 'offset' into 'destination' -> get num bytes read
+    ret = copy_to_user(destination, msg, size);
+    loaded_bytes = size - ret;
     return loaded_bytes;
+
+get_failure:
+    return fail;
 }
 
 /**
