@@ -1,4 +1,4 @@
-NBLOCKS := 10
+NBLOCKS := 1000
 WB := 1
 
 ifeq ($(KERNELRELEASE),)

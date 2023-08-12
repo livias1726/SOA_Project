@@ -20,14 +20,9 @@ static struct dentry_operations aos_de_ops = {
 
 static int init_fs_info(aos_fs_info_t *info, struct aos_super_block* aos_sb) {
     // build free blocks bitmap as an array of uint64_t
-    int nblocks = aos_sb->partition_size;
-    int nll = ROUND_UP(nblocks, 64); // number of uint64_t needed to represent nblocks
-    int nll_bytes = ROUND_UP(nll, 8);
+    int nbytes = (ROUND_UP(aos_sb->partition_size, 64)) * 8;
 
-    printk(KERN_DEBUG "%s: [init_fs_info()] [%d] nblocks, [%d] nll, [%d] nll_bytes\n",
-           MODNAME, nblocks, nll, nll_bytes);
-
-    info->free_blocks = kzalloc(nll_bytes, GFP_KERNEL);
+    info->free_blocks = kzalloc(nbytes, GFP_KERNEL);
     if (!info->free_blocks) {
         printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
         return -ENOMEM;
@@ -36,11 +31,6 @@ static int init_fs_info(aos_fs_info_t *info, struct aos_super_block* aos_sb) {
     // set first two blocks as used (superblock and inode block)
     SET_BIT(info->free_blocks, 0);
     SET_BIT(info->free_blocks, 1);
-
-    printk(KERN_DEBUG "%s: [init_fs_info()] free_blocks [%llu, %llu, %llu ... %llu]\n",
-           MODNAME, TEST_BIT(info->free_blocks, 0),
-           TEST_BIT(info->free_blocks, 1), TEST_BIT(info->free_blocks, 2),
-           TEST_BIT(info->free_blocks, nblocks-1));
 
     info->sb = aos_sb;
     info->vfs_sb->s_fs_info = info;
@@ -102,9 +92,6 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
         return -ENOMEM;
     }
 
-    printk(KERN_ALERT "%s: init info OK\n", MODNAME);
-
-    printk(KERN_ALERT "%s: init inode\n", MODNAME);
     /* Get a VFS inode for the root directory */
     root_inode = iget_locked(sb, SUPER_BLOCK_IDX);
     if (!root_inode) {
@@ -126,10 +113,8 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 
         // no inode from device is needed - the root of our file system is an in memory object
         root_inode->i_private = NULL;
-
-        printk(KERN_INFO "%s: built a new root inode.\n", MODNAME);
     }
-    printk(KERN_ALERT "%s: init inode OK\n", MODNAME);
+
     /* Make the VFS superblock point to the dentry. */
     sb->s_root = d_make_root(root_inode);
     if (!sb->s_root) {
