@@ -1,4 +1,5 @@
 SUBDIRS := fs
+SCTHDIR := ./lib/Linux-sys_call_table-discoverer
 SCT := $(shell cat /sys/module/the_usctm/parameters/sys_call_table_address)
 KERNELDIR := /lib/modules/$(shell uname -r)/build
 FSDIR := ./fs
@@ -19,13 +20,17 @@ create-fs:
 	make -C $(FSDIR) create-fs
 
 mount-fs:
-	make -C $(FSDIR) mount-fs
+	sudo make -C $(FSDIR) mount-fs
 
 umount-fs:
-	make -C $(FSDIR) umount-fs
+	sudo make -C $(FSDIR) umount-fs
+
+mount-utils:
+	make -C $(SCTHDIR) all
+	sudo insmod $(SCTHDIR)/the_usctm.ko
 
 insmod:
-	insmod aos.ko the_syscall_table=$(SCT)
+	sudo insmod aos.ko the_syscall_table=$(SCT)
 
 rmmod:
 	rmmod aos

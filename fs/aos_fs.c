@@ -24,12 +24,23 @@ static int init_fs_info(aos_fs_info_t *info, struct aos_super_block* aos_sb) {
     int nll = ROUND_UP(nblocks, 64); // number of uint64_t needed to represent nblocks
     int nll_bytes = ROUND_UP(nll, 8);
 
+    printk(KERN_DEBUG "%s: [init_fs_info()] [%d] nblocks, [%d] nll, [%d] nll_bytes\n",
+           MODNAME, nblocks, nll, nll_bytes);
+
     info->free_blocks = kzalloc(nll_bytes, GFP_KERNEL);
-    if (!info->free_blocks) return -ENOMEM;
+    if (!info->free_blocks) {
+        printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
+        return -ENOMEM;
+    }
 
     // set first two blocks as used (superblock and inode block)
     SET_BIT(info->free_blocks, 0);
     SET_BIT(info->free_blocks, 1);
+
+    printk(KERN_DEBUG "%s: [init_fs_info()] free_blocks [%llu, %llu, %llu ... %llu]\n",
+           MODNAME, TEST_BIT(info->free_blocks, 0),
+           TEST_BIT(info->free_blocks, 1), TEST_BIT(info->free_blocks, 2),
+           TEST_BIT(info->free_blocks, nblocks-1));
 
     info->sb = aos_sb;
     info->vfs_sb->s_fs_info = info;
@@ -78,8 +89,6 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     sb->s_type = &aos_fs_type;
     sb->s_op = &aos_sb_ops;
 
-    printk(KERN_ALERT "%s: init info\n", MODNAME);
-
     /* Create AOS FS info */
     info = (aos_fs_info_t *)(kzalloc(sizeof(aos_fs_info_t), GFP_KERNEL));
     if (!info) {
@@ -87,7 +96,7 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
         return -ENOMEM;
     }
     info->vfs_sb = sb;
-    if(!init_fs_info(info, &aos_sb)) {
+    if(init_fs_info(info, &aos_sb)) {
         printk(KERN_ALERT "%s: [aos_fill_super()] couldn't initialize aos_fs_info structure\n", MODNAME);
         kfree(info);
         return -ENOMEM;
