@@ -21,27 +21,39 @@
  * Opens the device
  * */
 int aos_open(struct inode *inode, struct file *filp){
-    aos_fs_info_t *info;
+    aos_fs_info_t *info = inode->i_sb->s_fs_info;
 
-    info = inode->i_sb->s_fs_info;
-    if (!info->is_mounted) return -ENODEV;
+    // check if the FS is mounted
+    if (!info->is_mounted) {
+        printk(KERN_WARNING "%s: [aos_open()] operation failed - fs not mounted.\n", MODNAME);
+        return -ENODEV;
+    }
 
-    /* todo: check permission */
-    //if (filp->f_flags & FMODE_WRITE)
+    // atomic add to usage counter
+    __sync_fetch_and_add(&(info->count),1);
 
-    printk("%s: device file successfully opened by thread %d\n", MODNAME, current->pid);
+    printk(KERN_INFO "%s: device file successfully opened by thread %d\n", MODNAME, current->pid);
 
     return 0;
 }
 
 /*
- * Releases the file object. Called when the last reference to an open file is closed—
- * that is, when the f_count field of the file object becomes 0.
+ * Releases the file object.
  * */
 int aos_release(struct inode *inode, struct file *filp){
 
+    aos_fs_info_t *info = inode->i_sb->s_fs_info;
 
-    printk("%s: device file closed by thread %d\n",MODNAME, current->pid);
+    // check if the FS is mounted
+    if (!info->is_mounted) {
+        printk(KERN_WARNING "%s: [aos_release()] operation failed - fs not mounted.\n", MODNAME);
+        return -ENODEV;
+    }
+
+    // atomic sub to usage counter
+    __sync_fetch_and_sub(&(info->count),1);
+
+    printk(KERN_INFO "%s: device file closed by thread %d\n",MODNAME, current->pid);
 
     return 0;
 }
@@ -56,16 +68,19 @@ int aos_release(struct inode *inode, struct file *filp){
 ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 
     struct buffer_head *bh = NULL;
-    struct inode * the_inode = filp->f_inode;
+    struct inode *the_inode = filp->f_inode;
     uint64_t file_size = the_inode->i_size;
     int ret;
     loff_t offset;
     int block_to_read;  //index of the block to be read from device
 
-    aos_fs_info_t *info = the_inode->i_sb->s_fs_info;
-    if(!info->is_mounted) return -ENODEV;
+    aos_fs_info_t *info = &fs_info;
+    if(!info->is_mounted) {
+        printk(KERN_WARNING "%s: [aos_read()] operation failed - fs not mounted.\n", MODNAME);
+        return -ENODEV;
+    }
 
-    printk("%s: read operation called with len %ld and offset %lld (the current file size is %lld)",
+    printk(KERN_INFO "%s: read operation called with len %ld and offset %lld (the current file size is %lld)",
            MODNAME, count, *f_pos, file_size);
 
     // check boundaries
@@ -83,7 +98,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     // compute the actual index of the block to be read from device
     block_to_read = (*f_pos / AOS_BLOCK_SIZE) + 2; //the value 2 accounts for superblock and file-inode on device
 
-    printk("%s: read operation must access block %d of the device", MODNAME, block_to_read);
+    printk(KERN_INFO "%s: read operation must access block %d of the device", MODNAME, block_to_read);
 
     bh = (struct buffer_head *)sb_bread(filp->f_path.dentry->d_inode->i_sb, block_to_read);
     if(!bh) return -EIO;
@@ -104,7 +119,7 @@ static struct dentry *aos_lookup(struct inode *parent_inode, struct dentry *dent
     struct buffer_head *bh = NULL;
     struct inode *inode = NULL;
 
-    printk("%s: running the lookup inode-function for name %s", MODNAME, dentry->d_name.name);
+    printk(KERN_INFO "%s: running the lookup inode-function for name %s", MODNAME, dentry->d_name.name);
 
     if (strcmp(dentry->d_name.name, DEVICE_NAME)) return NULL;
 

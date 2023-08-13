@@ -49,7 +49,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     }
 
     // check legal size
-    if (size >= sizeof(struct aos_data_block)) {
+    if (size < 0 || size >= sizeof(struct aos_data_block)) {
         fail = -EINVAL;
         goto put_failure;
     }
@@ -125,48 +125,62 @@ __SYSCALL_DEFINEx(3, _get_data, uint64_t, offset, char *, destination, size_t, s
 asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 #endif
 
+    /* warning:
+     *      this operation is performed by a reader on a given data block:
+     *      need to acquire a reader lock on the block data to avoid conflicts if another thread concurrently tries
+     *      to invalidate data.
+     * */
+
     aos_fs_info_t *aos_info;
     struct super_block *sb;
     struct buffer_head *bh;
-    struct aos_super_block* aos_sb;
-    struct aos_data_block *data_block;
-    int fail, loaded_bytes;
+    struct aos_super_block *aos_sb;
+    struct aos_data_block *data_block = NULL;
+    int loaded_bytes, len;
     char * msg;
     size_t ret;
 
-    aos_info = &fs_info;
     // check if device is mounted
-    if (!aos_info->is_mounted) {
-        fail = -ENODEV;
-        goto get_failure;
-    }
-    // check legal operation
+    aos_info = &fs_info;
+    if (!aos_info->is_mounted) return -ENODEV;
+
+    // check parameters
     aos_sb = aos_info->sb;
-    if (offset < 2 || offset > aos_sb->partition_size || size < 0 || size > aos_sb->block_size) {
-        fail = -EINVAL;
-        goto get_failure;
-    }
+    if (offset < 2 || offset > aos_sb->partition_size || size < 0 || size > aos_sb->block_size) return -EINVAL;
+
+    // todo: signal the presence of a reader on the block
 
     // get data block in page cache buffer
     sb = aos_info->vfs_sb;
     bh = sb_bread(sb, offset);
     if(!bh) {
-        fail = -EIO;
-        goto get_failure;
+        // todo: release reader lock
+        return -EIO;
     }
-    data_block = (struct aos_data_block*)bh->b_data;
+    memcpy(data_block, bh->b_data, sizeof(struct aos_data_block));
+    brelse(bh);
+
+    // check data validity
+    if (!data_block->metadata.is_valid) {
+        // todo: release reader lock
+        return -ENODATA;
+    }
 
     msg = data_block->data.msg;
-    if (strlen(msg) == 0) return 0; // no available data
-    if (!data_block->metadata.is_valid) return -ENODATA; // no valid data
+    len = strlen(msg);
+    if (len == 0) {
+        // todo: release reader lock
+        return 0; // no available data
+    } else if (len < size) {
+        size = len;
+    }
 
-    // try to read 'size' bytes of data starting from 'offset' into 'destination' -> get num bytes read
+    // try to read 'size' bytes of data starting from 'offset' into 'destination'
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
-    return loaded_bytes;
 
-get_failure:
-    return fail;
+    // todo: release reader lock
+    return loaded_bytes;
 }
 
 /**

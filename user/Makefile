@@ -3,3 +3,6 @@ all:
 
 clean:
 	rm user
+
+run:
+	./user 174 177 178

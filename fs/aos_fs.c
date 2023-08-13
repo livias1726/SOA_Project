@@ -139,7 +139,10 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 
 static void aos_kill_superblock(struct super_block *sb){
     // todo: wait for pending operations
-    kfree(sb->s_fs_info);
+    aos_fs_info_t *info = sb->s_fs_info;
+    kfree(info->free_blocks);
+    kfree(info);
+
     kill_block_super(sb);
 }
 

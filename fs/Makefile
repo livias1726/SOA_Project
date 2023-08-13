@@ -1,5 +1,4 @@
 NBLOCKS := 1000
-WB := 1
 
 ifeq ($(KERNELRELEASE),)
 
