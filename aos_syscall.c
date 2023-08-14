@@ -19,6 +19,8 @@ unsigned long new_sys_call_array[] = {0x0, 0x0, 0x0};   //please set to sys_vtpm
 #define HACKED_ENTRIES (int)(sizeof(new_sys_call_array)/sizeof(unsigned long))
 int restore[HACKED_ENTRIES] = {[0 ... (HACKED_ENTRIES-1)] -1};
 
+extern aos_fs_info_t *info;
+
 /**
  * Put into one free block of the block-device 'size' bytes of the user-space data identified by the 'source' pointer.
  * This operation must be executed all or nothing.
@@ -40,19 +42,27 @@ asmlinkage int sys_put_data(char * source, size_t size){
     char * msg;
     size_t ret;
 
-    aos_info = &fs_info;
+    AUDIT { printk(KERN_INFO "%s: starting PUT syscall with size %lu\n", MODNAME, size); }
+
+    aos_info = info;
+
+    AUDIT { printk(KERN_INFO "%s: [put_data()] retrieved file system info (%p)\n", MODNAME, aos_info); }
 
     // check if device is mounted
-    if (!aos_info->is_mounted) { // checkme: try to check if mount status can be detected from sb_bread
+    if (!aos_info->is_mounted) {
+        printk(KERN_WARNING "%s: [put_data()] no device found\n", MODNAME);
         fail = -ENODEV;
         goto put_failure;
     }
+    AUDIT { printk(KERN_INFO "%s: [put_data()] device is mounted\n", MODNAME); }
 
     // check legal size
     if (size < 0 || size >= sizeof(struct aos_data_block)) {
+        printk(KERN_WARNING "%s: [put_data()] invalid size (%lu)\n", MODNAME, size);
         fail = -EINVAL;
         goto put_failure;
     }
+    AUDIT { printk(KERN_INFO "%s: [put_data()] size is within bounds\n", MODNAME); }
 
     // find a free block
     aos_sb = aos_info->sb;
@@ -73,17 +83,19 @@ asmlinkage int sys_put_data(char * source, size_t size){
         }
         break;
     }
-
     if(block_index == -1) {
+        printk(KERN_WARNING "%s: [put_data()] no free block was found.\n", MODNAME);
         fail = -ENOMEM;
         goto put_failure;
     }
+    AUDIT { printk(KERN_INFO "%s: [put_data()] block %d was found free.\n", MODNAME, block_index); }
 
     SET_BIT(aos_info->free_blocks, block_index);
 
     // alloc area to retrieve message from user
     msg = kzalloc(size, GFP_KERNEL);
     if (!msg) {
+        printk(KERN_WARNING "%s: [put_data()] couldn't allocate buffer.\n", MODNAME);
         fail = -ENOMEM;
         goto put_failure;
     }
@@ -91,11 +103,14 @@ asmlinkage int sys_put_data(char * source, size_t size){
     size -= ret;
     msg[size+1] = '\0';
 
+    AUDIT { printk(KERN_INFO "%s: [put_data()] %lu bytes were copied from user.\n", MODNAME, size); }
+
     sb = aos_info->vfs_sb;
 
     // get data block in page cache buffer
     bh = sb_bread(sb, block_index);
     if(!bh) {
+        printk(KERN_WARNING "%s: [put_data()] couldn't read data block from page cache.\n", MODNAME);
         fail = -EIO;
         goto put_failure;
     }
@@ -107,6 +122,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
     sync_dirty_buffer(bh); // immediate synchronous write on the device
 #endif
     brelse(bh);
+
+    AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful.\n", MODNAME); }
 
     return block_index;
 
@@ -141,7 +158,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     size_t ret;
 
     // check if device is mounted
-    aos_info = &fs_info;
+    aos_info = info;
     if (!aos_info->is_mounted) return -ENODEV;
 
     // check parameters
@@ -199,7 +216,7 @@ asmlinkage int sys_invalidate_data(uint64_t offset){
     struct aos_data_block *data_block;
     int fail;
 
-    aos_info = &fs_info;
+    aos_info = info;
     // check if device is mounted
     if (!aos_info->is_mounted) {
         fail = -ENODEV;

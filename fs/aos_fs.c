@@ -18,7 +18,9 @@ static struct super_operations aos_sb_ops = {
 static struct dentry_operations aos_de_ops = {
 };
 
-static int init_fs_info(aos_fs_info_t *info, struct aos_super_block* aos_sb) {
+aos_fs_info_t *info;
+
+static int init_fs_info(/*aos_fs_info_t *info,*/ struct aos_super_block* aos_sb) {
     // build free blocks bitmap as an array of uint64_t
     int nbytes = (ROUND_UP(aos_sb->partition_size, 64)) * 8;
 
@@ -47,7 +49,7 @@ static int init_fs_info(aos_fs_info_t *info, struct aos_super_block* aos_sb) {
  * */
 static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 
-    aos_fs_info_t *info;
+    //aos_fs_info_t *info;
     struct aos_super_block aos_sb;
     struct inode *root_inode;
     struct buffer_head *bh;
@@ -86,7 +88,7 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
         return -ENOMEM;
     }
     info->vfs_sb = sb;
-    if(init_fs_info(info, &aos_sb)) {
+    if(init_fs_info(/*info,*/ &aos_sb)) {
         printk(KERN_ALERT "%s: [aos_fill_super()] couldn't initialize aos_fs_info structure\n", MODNAME);
         kfree(info);
         return -ENOMEM;
@@ -127,7 +129,7 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     sb->s_root->d_op = &aos_de_ops;
 
     info->is_mounted = 1;
-    fs_info = *info;
+    //fs_info = *info;
 
     // unlock the inode to make it usable
     unlock_new_inode(root_inode);
@@ -138,8 +140,12 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 }
 
 static void aos_kill_superblock(struct super_block *sb){
+    aos_fs_info_t *aos_info = sb->s_fs_info;
+
     // todo: wait for pending operations
-    aos_fs_info_t *info = sb->s_fs_info;
+
+    // todo: signal device unmounting
+
     kfree(info->free_blocks);
     kfree(info);
 

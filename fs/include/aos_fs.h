@@ -66,7 +66,7 @@ struct aos_data_block {
 typedef struct aos_fs_info {
     struct super_block *vfs_sb; /* VFS super block structure */
     struct aos_super_block *sb; /* AOS super block structure */
-    uint8_t is_mounted;
+    uint8_t is_mounted;         /* Change this atomically */
     uint64_t count;             /* Number of thread currently operating on the device */
     uint64_t* free_blocks;      /* Pointer to a bitmap to represent the state of each data block */
 } aos_fs_info_t;
@@ -76,6 +76,7 @@ extern const struct file_operations aos_file_ops;
 extern const struct file_operations aos_dir_ops;
 extern struct file_system_type aos_fs_type;
 
-static aos_fs_info_t fs_info;
+// global info structure for kernel operations
+//aos_fs_info_t fs_info;
 
 #endif //SOA_PROJECT_AOS_FS_H

@@ -17,11 +17,13 @@
  * When the device is not mounted, the above file operations should simply return with error.
  */
 
+extern aos_fs_info_t *info;
+
 /*
  * Opens the device
  * */
 int aos_open(struct inode *inode, struct file *filp){
-    aos_fs_info_t *info = inode->i_sb->s_fs_info;
+    aos_fs_info_t *aos_info = inode->i_sb->s_fs_info;
 
     // check if the FS is mounted
     if (!info->is_mounted) {
@@ -42,7 +44,7 @@ int aos_open(struct inode *inode, struct file *filp){
  * */
 int aos_release(struct inode *inode, struct file *filp){
 
-    aos_fs_info_t *info = inode->i_sb->s_fs_info;
+    aos_fs_info_t *aos_info = inode->i_sb->s_fs_info;
 
     // check if the FS is mounted
     if (!info->is_mounted) {
@@ -74,7 +76,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     loff_t offset;
     int block_to_read;  //index of the block to be read from device
 
-    aos_fs_info_t *info = &fs_info;
+    aos_fs_info_t *aos_info = info;
     if(!info->is_mounted) {
         printk(KERN_WARNING "%s: [aos_read()] operation failed - fs not mounted.\n", MODNAME);
         return -ENODEV;

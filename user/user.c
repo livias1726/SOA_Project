@@ -88,13 +88,18 @@ int check_input(int argc, char *argv[], int *put, int *get, int *inv){
 
     // test for syscalls existence with invalid params to return a known error
     ret = syscall(*put, NULL, -1);
-    if(ret == -1 && errno == ENOSYS) printf("Test to PUT returned with error. System call not installed.\n");
+    perror("put\n");
+    //if(ret == -1 && errno == ENOSYS) printf("Test to PUT returned with error. System call not installed.\n");
+/*
     ret = syscall(*get, -1, NULL, -1);
-    if(ret == -1 && errno == ENOSYS) printf("Test to GET returned with error. System call not installed.\n");
-    ret = syscall(*inv, -1);
-    if(ret == -1 && errno == ENOSYS) printf("Test to INVALIDATE returned with error. System call not installed.\n");
+    perror("get\n");
+    //if(ret == -1 && errno == ENOSYS) printf("Test to GET returned with error. System call not installed.\n");
 
-    return 0;
+    ret = syscall(*inv, -1);
+    perror("inv\n");
+    //if(ret == -1 && errno == ENOSYS) printf("Test to INVALIDATE returned with error. System call not installed.\n");
+*/
+    return -1;
 }
 
 int main(int argc, char *argv[]){
