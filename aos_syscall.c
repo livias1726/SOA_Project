@@ -32,34 +32,22 @@ __SYSCALL_DEFINEx(2, _put_data, char *, source, size_t, size){
 #else
 asmlinkage int sys_put_data(char * source, size_t size){
 #endif
-    aos_fs_info_t *aos_info;
-    struct super_block *sb;
     struct buffer_head *bh;
-    struct aos_super_block aos_sb;
     uint64_t* free_map;
     uint64_t nblocks;
-    int i, j, fail, block_index = -1;
+    int i, j, block_index = -1;
     char * msg;
     size_t ret;
 
-    aos_info = info;
-
     // check if device is mounted
-    if (!aos_info->is_mounted) {
-        fail = -ENODEV;
-        goto put_failure;
-    }
+    if (!info->is_mounted) return -ENODEV;
 
     // check legal size
-    if (size >= sizeof(struct aos_data_block)) {
-        fail = -EINVAL;
-        goto put_failure;
-    }
+    if (size >= sizeof(struct aos_data_block)) return -EINVAL;
 
     // find a free block
-    aos_sb = aos_info->sb;
-    free_map = aos_info->free_blocks;
-    nblocks = aos_sb.partition_size;
+    free_map = info->free_blocks;
+    nblocks = info->sb.partition_size;
 
     for (i = 0; i < nblocks; i+=64) { // scan 64 bit at a time
         if ((*free_map & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
@@ -71,7 +59,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
         // found bit block with a bit unset
         for (j = 0; j < 64; ++j) {
             AUDIT { printk(KERN_INFO "%s: blocks [%d] - testing bit %d", MODNAME, i, j); }
-            if (TEST_BIT(free_map, j)) {
+            if (!(TEST_BIT(free_map, j))) {
                 AUDIT { printk(KERN_INFO "%s: blocks [%d] - bit %d = %llu", MODNAME, i, j, TEST_BIT(free_map, j)); }
                 block_index = i + j;
                 break;
@@ -80,35 +68,28 @@ asmlinkage int sys_put_data(char * source, size_t size){
         break;
     }
     if(block_index == -1) {
-        printk(KERN_WARNING "%s: [put_data()] no free block was found.\n", MODNAME);
-        fail = -ENOMEM;
-        goto put_failure;
+        printk(KERN_ERR "%s: [put_data()] no free block was found.\n", MODNAME);
+        return -ENOMEM;
     }
     AUDIT { printk(KERN_INFO "%s: [put_data()] block %d was found free.\n", MODNAME, block_index); }
 
-    SET_BIT(aos_info->free_blocks, block_index);
+    SET_BIT(info->free_blocks, block_index);
 
     // alloc area to retrieve message from user
     msg = kzalloc(size, GFP_KERNEL);
     if (!msg) {
-        printk(KERN_WARNING "%s: [put_data()] couldn't allocate buffer.\n", MODNAME);
-        fail = -ENOMEM;
-        goto put_failure;
+        printk(KERN_ERR "%s: [put_data()] couldn't allocate buffer.\n", MODNAME);
+        return -ENOMEM;
     }
     ret = copy_from_user(msg, source, size);
     size -= ret;
     msg[size+1] = '\0';
 
-    AUDIT { printk(KERN_INFO "%s: [put_data()] %lu bytes were copied from user.\n", MODNAME, size); }
-
-    sb = aos_info->vfs_sb;
-
     // get data block in page cache buffer
-    bh = sb_bread(sb, block_index);
+    bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
-        printk(KERN_WARNING "%s: [put_data()] couldn't read data block from page cache.\n", MODNAME);
-        fail = -EIO;
-        goto put_failure;
+        printk(KERN_ERR "%s: [put_data()] couldn't read data block from page cache.\n", MODNAME);
+        return -EIO;
     }
 
     // write data on the free block
@@ -122,9 +103,6 @@ asmlinkage int sys_put_data(char * source, size_t size){
     AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful.\n", MODNAME); }
 
     return block_index;
-
-put_failure:
-    return fail;
 }
 
 /**
