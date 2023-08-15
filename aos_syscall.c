@@ -35,48 +35,44 @@ asmlinkage int sys_put_data(char * source, size_t size){
     aos_fs_info_t *aos_info;
     struct super_block *sb;
     struct buffer_head *bh;
-    struct aos_super_block* aos_sb;
+    struct aos_super_block aos_sb;
     uint64_t* free_map;
     uint64_t nblocks;
     int i, j, fail, block_index = -1;
     char * msg;
     size_t ret;
 
-    AUDIT { printk(KERN_INFO "%s: starting PUT syscall with size %lu\n", MODNAME, size); }
-
     aos_info = info;
-
-    AUDIT { printk(KERN_INFO "%s: [put_data()] retrieved file system info (%p)\n", MODNAME, aos_info); }
 
     // check if device is mounted
     if (!aos_info->is_mounted) {
-        printk(KERN_WARNING "%s: [put_data()] no device found\n", MODNAME);
         fail = -ENODEV;
         goto put_failure;
     }
-    AUDIT { printk(KERN_INFO "%s: [put_data()] device is mounted\n", MODNAME); }
 
     // check legal size
-    if (size < 0 || size >= sizeof(struct aos_data_block)) {
-        printk(KERN_WARNING "%s: [put_data()] invalid size (%lu)\n", MODNAME, size);
+    if (size >= sizeof(struct aos_data_block)) {
         fail = -EINVAL;
         goto put_failure;
     }
-    AUDIT { printk(KERN_INFO "%s: [put_data()] size is within bounds\n", MODNAME); }
 
     // find a free block
     aos_sb = aos_info->sb;
     free_map = aos_info->free_blocks;
-    nblocks = aos_sb->partition_size;
+    nblocks = aos_sb.partition_size;
+
     for (i = 0; i < nblocks; i+=64) { // scan 64 bit at a time
         if ((*free_map & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
+            AUDIT { printk(KERN_INFO "%s: blocks [%d:%d] full", MODNAME, i, i+63); }
             free_map++;
             continue;
         }
 
         // found bit block with a bit unset
         for (j = 0; j < 64; ++j) {
+            AUDIT { printk(KERN_INFO "%s: blocks [%d] - testing bit %d", MODNAME, i, j); }
             if (TEST_BIT(free_map, j)) {
+                AUDIT { printk(KERN_INFO "%s: blocks [%d] - bit %d = %llu", MODNAME, i, j, TEST_BIT(free_map, j)); }
                 block_index = i + j;
                 break;
             }
@@ -151,8 +147,8 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     aos_fs_info_t *aos_info;
     struct super_block *sb;
     struct buffer_head *bh;
-    struct aos_super_block *aos_sb;
-    struct aos_data_block *data_block = NULL;
+    struct aos_super_block aos_sb;
+    struct aos_data_block data_block;
     int loaded_bytes, len;
     char * msg;
     size_t ret;
@@ -163,7 +159,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     // check parameters
     aos_sb = aos_info->sb;
-    if (offset < 2 || offset > aos_sb->partition_size || size < 0 || size > aos_sb->block_size) return -EINVAL;
+    if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.block_size) return -EINVAL;
 
     // todo: signal the presence of a reader on the block
 
@@ -174,16 +170,16 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
         // todo: release reader lock
         return -EIO;
     }
-    memcpy(data_block, bh->b_data, sizeof(struct aos_data_block));
+    memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
     brelse(bh);
 
     // check data validity
-    if (!data_block->metadata.is_valid) {
+    if (!data_block.metadata.is_valid) {
         // todo: release reader lock
         return -ENODATA;
     }
 
-    msg = data_block->data.msg;
+    msg = data_block.data.msg;
     len = strlen(msg);
     if (len == 0) {
         // todo: release reader lock
@@ -223,7 +219,7 @@ asmlinkage int sys_invalidate_data(uint64_t offset){
         goto inv_failure;
     }
     // check legal operation
-    if (offset < 2 || offset > aos_info->sb->partition_size) {
+    if (offset < 2 || offset > aos_info->sb.partition_size) {
         fail = -EINVAL;
         goto inv_failure;
     }

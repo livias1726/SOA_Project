@@ -1,8 +1,10 @@
 #ifndef SOA_PROJECT_AOS_FS_H
 #define SOA_PROJECT_AOS_FS_H
 
+#ifdef __KERNEL__
 #include <linux/fs.h>
 #include <linux/types.h>
+#endif
 
 #define MAGIC 0x42424242
 #define AOS_BLOCK_SIZE 4096
@@ -65,7 +67,7 @@ struct aos_data_block {
 /* file system info */
 typedef struct aos_fs_info {
     struct super_block *vfs_sb; /* VFS super block structure */
-    struct aos_super_block *sb; /* AOS super block structure */
+    struct aos_super_block sb; /* AOS super block structure */
     uint8_t is_mounted;         /* Change this atomically */
     uint64_t count;             /* Number of thread currently operating on the device */
     uint64_t* free_blocks;      /* Pointer to a bitmap to represent the state of each data block */

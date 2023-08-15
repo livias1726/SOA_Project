@@ -4,7 +4,6 @@
 #include <linux/time.h>
 #include <linux/buffer_head.h>
 #include <linux/types.h>
-#include <linux/slab.h>
 #include <linux/string.h>
 
 #include "include/aos_fs.h"
@@ -23,7 +22,6 @@ extern aos_fs_info_t *info;
  * Opens the device
  * */
 int aos_open(struct inode *inode, struct file *filp){
-    aos_fs_info_t *aos_info = inode->i_sb->s_fs_info;
 
     // check if the FS is mounted
     if (!info->is_mounted) {
@@ -43,8 +41,6 @@ int aos_open(struct inode *inode, struct file *filp){
  * Releases the file object.
  * */
 int aos_release(struct inode *inode, struct file *filp){
-
-    aos_fs_info_t *aos_info = inode->i_sb->s_fs_info;
 
     // check if the FS is mounted
     if (!info->is_mounted) {
@@ -76,7 +72,6 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     loff_t offset;
     int block_to_read;  //index of the block to be read from device
 
-    aos_fs_info_t *aos_info = info;
     if(!info->is_mounted) {
         printk(KERN_WARNING "%s: [aos_read()] operation failed - fs not mounted.\n", MODNAME);
         return -ENODEV;

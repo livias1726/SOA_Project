@@ -1,20 +1,20 @@
 #include "user.h"
 
-void check_error(int ret){
-    switch(ret){
-        case -ENODEV:
+void check_error(){
+    switch(errno){
+        case ENODEV:
             printf("Device not mounted.\n");
             break;
-        case -EINVAL:
+        case EINVAL:
             printf("Input parameters are invalid.\n");
             break;
-        case -ENOMEM:
+        case ENOMEM:
             printf("Unavailable memory on device.\n");
             break;
-        case -EIO:
+        case EIO:
             printf("Couldn't read device block.\n");
             break;
-        case -ENODATA:
+        case ENODATA:
             printf("Unavailable data.\n");
             break;
     }
@@ -22,15 +22,17 @@ void check_error(int ret){
 
 void test_put_data(int sysno){
     int ret, size;
-    char* msg;
+    char *msg;
 
-    printf("Insert parameters:\n - Message: ");
-    scanf("%s", msg);
+    size = strlen(example_txt);
+    msg = malloc(size+1);
+    memcpy(msg, example_txt, size);
     size = strlen(msg);
 
+    printf("Test parameters:\n\tsource = \"%s\"\n\tsize = %d\n", msg, size);
     ret = syscall(sysno, msg, size);
     if(ret < 0) {
-        check_error(ret);
+        check_error();
     } else {
         printf("Message correctly delivered\n");
     }
@@ -87,10 +89,9 @@ int check_input(int argc, char *argv[], int *put, int *get, int *inv){
     *inv = atoi(argv[3]);
 
     // test for syscalls existence with invalid params to return a known error
-    ret = syscall(*put, NULL, -1);
-    perror("put\n");
-    //if(ret == -1 && errno == ENOSYS) printf("Test to PUT returned with error. System call not installed.\n");
-/*
+/*    ret = syscall(*put, NULL, -1);
+    if(ret == -1 && errno == ENOSYS) printf("Test to PUT returned with error. System call not installed.\n");
+
     ret = syscall(*get, -1, NULL, -1);
     perror("get\n");
     //if(ret == -1 && errno == ENOSYS) printf("Test to GET returned with error. System call not installed.\n");
@@ -99,7 +100,7 @@ int check_input(int argc, char *argv[], int *put, int *get, int *inv){
     perror("inv\n");
     //if(ret == -1 && errno == ENOSYS) printf("Test to INVALIDATE returned with error. System call not installed.\n");
 */
-    return -1;
+    return 0;
 }
 
 int main(int argc, char *argv[]){

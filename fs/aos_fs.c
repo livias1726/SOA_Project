@@ -20,7 +20,7 @@ static struct dentry_operations aos_de_ops = {
 
 aos_fs_info_t *info;
 
-static int init_fs_info(/*aos_fs_info_t *info,*/ struct aos_super_block* aos_sb) {
+static int init_fs_info(struct aos_super_block* aos_sb) {
     // build free blocks bitmap as an array of uint64_t
     int nbytes = (ROUND_UP(aos_sb->partition_size, 64)) * 8;
 
@@ -34,7 +34,6 @@ static int init_fs_info(/*aos_fs_info_t *info,*/ struct aos_super_block* aos_sb)
     SET_BIT(info->free_blocks, 0);
     SET_BIT(info->free_blocks, 1);
 
-    info->sb = aos_sb;
     info->vfs_sb->s_fs_info = info;
 
     return 0;
@@ -49,8 +48,6 @@ static int init_fs_info(/*aos_fs_info_t *info,*/ struct aos_super_block* aos_sb)
  * */
 static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 
-    //aos_fs_info_t *info;
-    struct aos_super_block aos_sb;
     struct inode *root_inode;
     struct buffer_head *bh;
     struct timespec64 curr_time;
@@ -61,18 +58,27 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
         return -EIO;
     }
 
+    /* Create AOS FS info */
+    info = (aos_fs_info_t *)(kzalloc(sizeof(aos_fs_info_t), GFP_KERNEL));
+    if (!info) {
+        printk(KERN_ALERT "%s: [aos_fill_super()] couldn't allocate aos_fs_info structure\n", MODNAME);
+        return -ENOMEM;
+    }
+
     /* Read superblock */
     bh = sb_bread(sb, SUPER_BLOCK_IDX);
     if(!bh) {
         printk(KERN_ALERT "%s: [aos_fill_super()] couldn't read the vfs superblock\n", MODNAME);
+        kfree(info);
         return -EIO;
     }
-    memcpy(&aos_sb, bh->b_data, AOS_BLOCK_SIZE);
+    memcpy(&info->sb, bh->b_data, AOS_BLOCK_SIZE);
     brelse(bh);
 
     /* Check magic number */
-    if(aos_sb.magic != MAGIC) {
+    if(info->sb.magic != MAGIC) {
         printk(KERN_ALERT "%s: [aos_fill_super()] incorrect magic number. abort mounting.\n", MODNAME);
+        kfree(info);
         return -EBADF;
     }
 
@@ -81,14 +87,8 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     sb->s_type = &aos_fs_type;
     sb->s_op = &aos_sb_ops;
 
-    /* Create AOS FS info */
-    info = (aos_fs_info_t *)(kzalloc(sizeof(aos_fs_info_t), GFP_KERNEL));
-    if (!info) {
-        printk(KERN_ALERT "%s: [aos_fill_super()] couldn't allocate aos_fs_info structure\n", MODNAME);
-        return -ENOMEM;
-    }
     info->vfs_sb = sb;
-    if(init_fs_info(/*info,*/ &aos_sb)) {
+    if(init_fs_info(&info->sb)) {
         printk(KERN_ALERT "%s: [aos_fill_super()] couldn't initialize aos_fs_info structure\n", MODNAME);
         kfree(info);
         return -ENOMEM;
@@ -140,7 +140,6 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 }
 
 static void aos_kill_superblock(struct super_block *sb){
-    aos_fs_info_t *aos_info = sb->s_fs_info;
 
     // todo: wait for pending operations
 
