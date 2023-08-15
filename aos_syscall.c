@@ -51,36 +51,27 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     for (i = 0; i < nblocks; i+=64) { // scan 64 bit at a time
         if ((*free_map & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
-            AUDIT { printk(KERN_INFO "%s: blocks [%d:%d] full", MODNAME, i, i+63); }
             free_map++;
             continue;
         }
 
         // found bit block with a bit unset
         for (j = 0; j < 64; ++j) {
-            AUDIT { printk(KERN_INFO "%s: blocks [%d] - testing bit %d", MODNAME, i, j); }
             if (!(TEST_BIT(free_map, j))) {
-                AUDIT { printk(KERN_INFO "%s: blocks [%d] - bit %d = %llu", MODNAME, i, j, TEST_BIT(free_map, j)); }
                 block_index = i + j;
                 break;
             }
         }
         break;
     }
-    if(block_index == -1) {
-        printk(KERN_ERR "%s: [put_data()] no free block was found.\n", MODNAME);
-        return -ENOMEM;
-    }
-    AUDIT { printk(KERN_INFO "%s: [put_data()] block %d was found free.\n", MODNAME, block_index); }
+    if(block_index == -1) return -ENOMEM;
 
     SET_BIT(info->free_blocks, block_index);
 
     // alloc area to retrieve message from user
     msg = kzalloc(size, GFP_KERNEL);
-    if (!msg) {
-        printk(KERN_ERR "%s: [put_data()] couldn't allocate buffer.\n", MODNAME);
-        return -ENOMEM;
-    }
+    if (!msg) return -ENOMEM;
+    // retrieve message from user
     ret = copy_from_user(msg, source, size);
     size -= ret;
     msg[size+1] = '\0';
@@ -88,7 +79,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     // get data block in page cache buffer
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
-        printk(KERN_ERR "%s: [put_data()] couldn't read data block from page cache.\n", MODNAME);
+        kfree(msg);
         return -EIO;
     }
 
@@ -96,11 +87,14 @@ asmlinkage int sys_put_data(char * source, size_t size){
     memcpy(bh->b_data, msg, size);
     mark_buffer_dirty(bh);
 #ifdef WB
+    AUDIT { printk(KERN_INFO "%s: [put_data()] forcing synchronization on page cache\n", MODNAME); }
     sync_dirty_buffer(bh); // immediate synchronous write on the device
 #endif
     brelse(bh);
+    kfree(msg);
 
-    AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful.\n", MODNAME); }
+    AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful - written %lu bytes in block %d\n",
+                   MODNAME, size, block_index); }
 
     return block_index;
 }
@@ -122,8 +116,6 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
      *      to invalidate data.
      * */
 
-    aos_fs_info_t *aos_info;
-    struct super_block *sb;
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
@@ -132,18 +124,16 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     size_t ret;
 
     // check if device is mounted
-    aos_info = info;
-    if (!aos_info->is_mounted) return -ENODEV;
+    if (!info->is_mounted) return -ENODEV;
 
     // check parameters
-    aos_sb = aos_info->sb;
+    aos_sb = info->sb;
     if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.block_size) return -EINVAL;
 
     // todo: signal the presence of a reader on the block
 
     // get data block in page cache buffer
-    sb = aos_info->vfs_sb;
-    bh = sb_bread(sb, offset);
+    bh = sb_bread(info->vfs_sb, offset);
     if(!bh) {
         // todo: release reader lock
         return -EIO;

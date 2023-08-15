@@ -12,20 +12,23 @@ software.
 The device driver is essentially based on system-calls partially supported by the VFS and partially
 not. The following VFS non-supported system calls are requested to be designed and
 implemented:
-* int put_data(char * source, size_t size) used to put into one free block of the block-device
-size bytes of the user-space data identified by the source pointer, this operation must be
-executed all or nothing; the system call returns an integer representing the offset of the
-device (the block index) where data have been put; if there is currently no room available on
-the device, the service should simply return the ENOMEM error;
-* int get_data(int offset, char * destination, size_t size) used to read up to size bytes from
-the block at a given offset , if it currently keeps data; this system call should return the
-amount of bytes actually loaded into the destination area or zero if no data is currently kept
-by the device block; this service should return the ENODATA error if no data is currently valid
-and associated with the offset parameter.
-* int invalidate_data(int offset) used to invalidate data in a block at a given offset;
-invalidation means that data should logically disappear from the device; this service should
-return the ENODATA error if no data is currently valid and associated with the offset
-parameter.
+* **int put_data(char * source, size_t size)**:
+  * Used to put into one free block of the block-device
+  size bytes of the user-space data identified by the source pointer, this operation must be
+  executed all or nothing; the system call returns an integer representing the offset of the
+  device (the block index) where data have been put; if there is currently no room available on
+  the device, the service should simply return the ENOMEM error;
+* **int get_data(int offset, char * destination, size_t size)**:
+  * Used to read up to size bytes from
+  the block at a given offset , if it currently keeps data; this system call should return the
+  amount of bytes actually loaded into the destination area or zero if no data is currently kept
+  by the device block; this service should return the ENODATA error if no data is currently valid
+  and associated with the offset parameter.
+* **int invalidate_data(int offset)**:
+  * Used to invalidate data in a block at a given offset; 
+  invalidation means that data should logically disappear from the device; this service should
+  return the ENODATA error if no data is currently valid and associated with the offset
+  parameter.
 
 When putting data, the operation of reporting data on the device can be either executed by the
 page-cache write back daemon of the Linux kernel or immediately (in a synchronous manner)
@@ -33,11 +36,10 @@ depending on a compile-time choice.
 
 The device driver should support file system operations allowing the access to the currently saved
 data:
-* open for opening the device as a simple stream of bytes
-* release for closing the file associated with the device
-* read to access the device file content, according to the order
-of the delivery of data. A read
-operation should only return data related to messages not invalidated before the access in
+* **open** -  for opening the device as a simple stream of bytes
+* **release** - for closing the file associated with the device
+* **read** - to access the device file content, according to the order
+of the delivery of data. A read operation should only return data related to messages not invalidated before the access in
 read mode to the corresponding block of the device in an I/O session.
 
 The device should be accessible as a file in a file system supporting the above file operations. At

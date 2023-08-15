@@ -57,11 +57,12 @@ int aos_release(struct inode *inode, struct file *filp){
 }
 
 /*
- * Reads count bytes from a file starting at position *f_pos;
- * the value *f_pos (which usually corresponds to the file pointer) is then increased.
+ * Reads count bytes from a file starting at position *f_pos; the value *f_pos (which usually corresponds to
+ * the file pointer) is then increased. To deliver the content chronologically, the file pointer should be
+ * updated to always point at the start of the oldest valid data.
  *
- * A read operation should only return data related to messages not invalidated
- * before the access in read mode to the corresponding block of the device in an I/O session.
+ * A read operation should only return data related to messages not invalidated before the access in read mode to
+ * the corresponding block of the device in an I/O session.
  * */
 ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 

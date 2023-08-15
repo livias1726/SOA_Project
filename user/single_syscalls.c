@@ -34,7 +34,7 @@ void test_put_data(int sysno){
     if(ret < 0) {
         check_error();
     } else {
-        printf("Message correctly delivered\n");
+        printf("Message correctly written in block %d\n", ret);
     }
 }
 
@@ -54,9 +54,9 @@ void test_get_data(int sysno) {
     }
     ret = syscall(sysno, block, msg, size);
     if(ret < 0) {
-        check_error(ret);
+        check_error();
     } else {
-        printf("Retrieved: %s\n", msg);
+        printf("Retrieved %d bytes: \"%s\"\n", ret, msg);
     }
 
     free(msg);
@@ -70,7 +70,7 @@ void test_invalidate_data(int sysno){
 
     ret = syscall(sysno, block);
     if(ret < 0) {
-        check_error(ret);
+        check_error();
     } else {
         printf("Block %d invalidated.\n", block);
     }
@@ -89,13 +89,12 @@ int check_input(int argc, char *argv[], int *put, int *get, int *inv){
     *inv = atoi(argv[3]);
 
     // test for syscalls existence with invalid params to return a known error
-/*    ret = syscall(*put, NULL, -1);
+    ret = syscall(*put, NULL, -1);
     if(ret == -1 && errno == ENOSYS) printf("Test to PUT returned with error. System call not installed.\n");
 
     ret = syscall(*get, -1, NULL, -1);
-    perror("get\n");
-    //if(ret == -1 && errno == ENOSYS) printf("Test to GET returned with error. System call not installed.\n");
-
+    if(ret == -1 && errno == ENOSYS) printf("Test to GET returned with error. System call not installed.\n");
+/*
     ret = syscall(*inv, -1);
     perror("inv\n");
     //if(ret == -1 && errno == ENOSYS) printf("Test to INVALIDATE returned with error. System call not installed.\n");
