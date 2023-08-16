@@ -46,9 +46,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
     if (size >= sizeof(struct aos_data_block)) return -EINVAL;
 
     // find a free block
+    read_lock(&info->fb_lock);
     free_map = info->free_blocks;
     nblocks = info->sb.partition_size;
-
     for (i = 0; i < nblocks; i+=64) { // scan 64 bit at a time
         if ((*free_map & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
             free_map++;
@@ -56,6 +56,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
         }
 
         // found bit block with a bit unset
+        read_unlock(&info->fb_lock);
+        write_lock(&info->fb_lock);
         for (j = 0; j < 64; ++j) {
             if (!(TEST_BIT(free_map, j))) {
                 block_index = i + j;
@@ -67,6 +69,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     if(block_index == -1) return -ENOMEM;
 
     SET_BIT(info->free_blocks, block_index);
+    write_unlock(&info->fb_lock);
 
     // alloc area to retrieve message from user
     msg = kzalloc(size, GFP_KERNEL);
@@ -77,6 +80,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     msg[size+1] = '\0';
 
     // get data block in page cache buffer
+    write_seqlock(&info->block_locks[block_index]);
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
         kfree(msg);
@@ -91,6 +95,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
     sync_dirty_buffer(bh); // immediate synchronous write on the device
 #endif
     brelse(bh);
+    write_sequnlock(&info->block_locks[block_index]);
+
     kfree(msg);
 
     AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful - written %lu bytes in block %d\n",
@@ -110,16 +116,11 @@ __SYSCALL_DEFINEx(3, _get_data, uint64_t, offset, char *, destination, size_t, s
 asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 #endif
 
-    /* warning:
-     *      this operation is performed by a reader on a given data block:
-     *      need to acquire a reader lock on the block data to avoid conflicts if another thread concurrently tries
-     *      to invalidate data.
-     * */
-
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
     int loaded_bytes, len;
+    unsigned int seq;
     char * msg;
     size_t ret;
 
@@ -130,27 +131,21 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     aos_sb = info->sb;
     if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.block_size) return -EINVAL;
 
-    // todo: signal the presence of a reader on the block
-
-    // get data block in page cache buffer
-    bh = sb_bread(info->vfs_sb, offset);
-    if(!bh) {
-        // todo: release reader lock
-        return -EIO;
-    }
-    memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
-    brelse(bh);
+    do {
+        seq = read_seqbegin(&info->block_locks[offset]);
+        // get data block in page cache buffer
+        bh = sb_bread(info->vfs_sb, offset);
+        if(!bh) return -EIO;
+        memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
+        brelse(bh);
+    } while (read_seqretry(&info->block_locks[offset], seq));
 
     // check data validity
-    if (!data_block.metadata.is_valid) {
-        // todo: release reader lock
-        return -ENODATA;
-    }
+    if (!data_block.metadata.is_valid) return -ENODATA;
 
     msg = data_block.data.msg;
     len = strlen(msg);
     if (len == 0) {
-        // todo: release reader lock
         return 0; // no available data
     } else if (len < size) {
         size = len;
@@ -160,7 +155,6 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
 
-    // todo: release reader lock
     return loaded_bytes;
 }
 
@@ -173,46 +167,42 @@ __SYSCALL_DEFINEx(1, _invalidate_data, uint64_t, offset){
 #else
 asmlinkage int sys_invalidate_data(uint64_t offset){
 #endif
-
-    aos_fs_info_t *aos_info;
-    struct super_block *sb;
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int fail;
+    unsigned int seq;
 
-    aos_info = info;
     // check if device is mounted
-    if (!aos_info->is_mounted) {
-        fail = -ENODEV;
-        goto inv_failure;
-    }
+    if (!info->is_mounted) return -ENODEV;
+
     // check legal operation
-    if (offset < 2 || offset > aos_info->sb.partition_size) {
-        fail = -EINVAL;
-        goto inv_failure;
-    }
+    if (offset < 2 || offset > info->sb.partition_size) return -EINVAL;
 
-    // get data block in page cache buffer
-    sb = aos_info->vfs_sb;
-    bh = sb_bread(sb, offset);
-    if(!bh) {
-        fail = -EIO;
-        goto inv_failure;
-    }
-    data_block = (struct aos_data_block*)bh->b_data;
+    do {
+        seq = read_seqbegin(&info->block_locks[offset]);
+        // get data block in page cache buffer
+        bh = sb_bread(info->vfs_sb, offset);
+        if(!bh) return -EIO;
+        data_block = (struct aos_data_block*)bh->b_data;
 
-    if (!data_block->metadata.is_valid) return -ENODATA; // no valid data
-
-    // invalidate data
-    data_block->metadata.is_valid = 0;
+        if (!data_block->metadata.is_valid) {
+            brelse(bh);
+            return -ENODATA; // no valid data
+        }
+    } while (read_seqretry(&info->block_locks[offset], seq));
 
     // set invalid block as free
-    CLEAR_BIT(aos_info->free_blocks, offset);
+    write_lock(&info->fb_lock);
+    CLEAR_BIT(info->free_blocks, offset);
+    write_unlock(&info->fb_lock);
+
+    // invalidate data
+    write_seqlock(&info->block_locks[offset]);
+    data_block->metadata.is_valid = 0;
+    mark_buffer_dirty(bh);
+    brelse(bh);
+    write_sequnlock(&info->block_locks[offset]);
 
     return 0;
-
-inv_failure:
-    return fail;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)

@@ -4,6 +4,8 @@
 #ifdef __KERNEL__
 #include <linux/fs.h>
 #include <linux/types.h>
+#include <linux/spinlock.h>
+#include <linux/seqlock.h>
 #endif
 
 #define MAGIC 0x42424242
@@ -65,20 +67,21 @@ struct aos_data_block {
 };
 
 /* file system info */
+#ifdef __KERNEL__
 typedef struct aos_fs_info {
     struct super_block *vfs_sb; /* VFS super block structure */
-    struct aos_super_block sb; /* AOS super block structure */
+    struct aos_super_block sb;  /* AOS super block structure */
     uint8_t is_mounted;         /* Change this atomically */
     uint64_t count;             /* Number of thread currently operating on the device */
     uint64_t* free_blocks;      /* Pointer to a bitmap to represent the state of each data block */
+    rwlock_t fb_lock;           /*  */
+    seqlock_t *block_locks;
 } aos_fs_info_t;
+#endif
 
 extern const struct inode_operations aos_inode_ops;
 extern const struct file_operations aos_file_ops;
 extern const struct file_operations aos_dir_ops;
 extern struct file_system_type aos_fs_type;
-
-// global info structure for kernel operations
-//aos_fs_info_t fs_info;
 
 #endif //SOA_PROJECT_AOS_FS_H

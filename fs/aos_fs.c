@@ -22,7 +22,8 @@ aos_fs_info_t *info;
 
 static int init_fs_info(struct aos_super_block* aos_sb) {
     // build free blocks bitmap as an array of uint64_t
-    int nbytes = (ROUND_UP(aos_sb->partition_size, 64)) * 8;
+    int nblocks = aos_sb->partition_size;
+    int i, nbytes = (ROUND_UP(nblocks, 64)) * 8;
 
     info->free_blocks = kzalloc(nbytes, GFP_KERNEL);
     if (!info->free_blocks) {
@@ -33,6 +34,19 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     // set first two blocks as used (superblock and inode block)
     SET_BIT(info->free_blocks, 0);
     SET_BIT(info->free_blocks, 1);
+
+    rwlock_init(&info->fb_lock);
+
+    nbytes = nblocks * sizeof(seqlock_t);
+    info->block_locks = (seqlock_t *)kzalloc(nbytes, GFP_KERNEL);
+    if (!info->block_locks) {
+        printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate seqlocks\n", MODNAME);
+        return -ENOMEM;
+    }
+
+    for (i = 0; i < nblocks; ++i) {
+        seqlock_init(&info->block_locks[i]);
+    }
 
     info->vfs_sb->s_fs_info = info;
 
