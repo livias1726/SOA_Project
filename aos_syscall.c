@@ -33,6 +33,7 @@ __SYSCALL_DEFINEx(2, _put_data, char *, source, size_t, size){
 asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     struct buffer_head *bh;
+    struct aos_data_block *data_block;
     uint64_t* free_map;
     uint64_t nblocks;
     int i, j, block_index = -1;
@@ -79,6 +80,11 @@ asmlinkage int sys_put_data(char * source, size_t size){
     size -= ret;
     msg[size+1] = '\0';
 
+    data_block = kmalloc(sizeof(struct aos_data_block), GFP_KERNEL);
+    if (!data_block) return -ENOMEM;
+    data_block->metadata.is_valid = 1;
+    memcpy(data_block->data.msg, msg, size);
+
     // get data block in page cache buffer
     write_seqlock(&info->block_locks[block_index]);
     bh = sb_bread(info->vfs_sb, block_index);
@@ -87,8 +93,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
         return -EIO;
     }
 
-    // write data on the free block
-    memcpy(bh->b_data, msg, size);
+    memcpy(bh->b_data, data_block, sizeof(*data_block));
     mark_buffer_dirty(bh);
 #ifdef WB
     AUDIT { printk(KERN_INFO "%s: [put_data()] forcing synchronization on page cache\n", MODNAME); }
