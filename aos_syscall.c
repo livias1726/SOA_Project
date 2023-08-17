@@ -155,6 +155,9 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
 
+    AUDIT { printk(KERN_INFO "%s: [get_data()] system call was successful - read %d bytes in block %llu\n",
+                   MODNAME, loaded_bytes, offset); }
+
     return loaded_bytes;
 }
 
@@ -201,6 +204,9 @@ asmlinkage int sys_invalidate_data(uint64_t offset){
     mark_buffer_dirty(bh);
     brelse(bh);
     write_sequnlock(&info->block_locks[offset]);
+
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] system call was successful - invalidated block %llu\n",
+                   MODNAME, offset); }
 
     return 0;
 }

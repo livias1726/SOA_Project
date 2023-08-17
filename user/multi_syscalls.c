@@ -1,98 +1,74 @@
 #include "user.h"
 
-void check_error(){
+int put;
+int get;
+int inv;
+
+void check_error(int tid){
     switch(errno){
         case ENODEV:
-            printf("Device not mounted.\n");
+            printf("[%d] - Device not mounted.\n", tid);
             break;
         case EINVAL:
-            printf("Input parameters are invalid.\n");
+            printf("[%d] - Input parameters are invalid.\n", tid);
             break;
         case ENOMEM:
-            printf("Unavailable memory on device.\n");
+            printf("[%d] - Unavailable memory on device.\n", tid);
             break;
         case EIO:
-            printf("Couldn't read device block.\n");
+            printf("[%d] - Couldn't read device block.\n", tid);
             break;
         case ENODATA:
-            printf("Unavailable data.\n");
+            printf("[%d] - Unavailable data.\n", tid);
             break;
     }
-}
-
-int prepare_arg_structs(put_args_t *pa, get_arg_t *ga, inv_args_t *ia){
-    pa = malloc(sizeof(put_args_t));
-    if (!pa) return -1;
-
-    ga = malloc(sizeof(get_arg_t));
-    if (!ga) {
-        free(pa);
-        return -1;
-    }
-
-    ia = malloc(sizeof(inv_args_t));
-    if(!ia){
-        free(pa);
-        free(ga);
-        return -1;
-    }
-
-    return 0;
 }
 
 void* test_put_data(void *arg){
-    int ret;
-    put_args_t *pa = (put_args_t*)arg;
+    int ret, tid = *(int*)arg, size = strlen(example_txt);
+    char *msg = malloc(size+1);
+    memcpy(msg, example_txt, size);
+    size = strlen(msg);
 
-    pa->size = strlen(example_txt);
-    pa->msg = malloc((pa->size)+1);
-    memcpy(pa->msg, example_txt, pa->size);
-    pa->size = strlen(pa->msg);
-
-    ret = syscall(pa->sysno, pa->msg, pa->size);
+    ret = syscall(put, msg, size);
     if(ret < 0) {
-        check_error();
+        check_error(tid);
         pthread_exit((void*)-1);
     } else {
+        printf("[%d] - PUT on %d\n", tid, ret);
         pthread_exit(0);
     }
 }
 
 void* test_get_data(void *arg) {
-    int ret;
-    get_arg_t *ga = (get_arg_t*)arg;
+    int ret, tid = *(int*)arg;
 
-    ga->msg = malloc(DEFAULT_SIZE);
-    if (!ga->msg) {
-        perror("malloc failed.");
-        pthread_exit((void*)-1);
-    }
+    char msg[DEFAULT_SIZE];
 
-    ret = syscall(ga->sysno, ga->block, ga->msg, ga->size);
+    ret = syscall(get, tid+2, msg, DEFAULT_SIZE);
     if(ret < 0) {
-        check_error();
-        free(ga->msg);
+        check_error(tid);
         pthread_exit((void*)-1);
     } else {
-        free(ga->msg);
+        printf("[%d] - GET from %d (%.*s)\n", tid, tid+2, 10, msg);
         pthread_exit(0);
     }
 }
 
 void* test_invalidate_data(void *arg){
-    int ret;
-    inv_args_t *ia = (inv_args_t*)arg;
+    int ret, tid = *(int*)arg;
 
-    ret = syscall(ia->sysno, ia->block);
+    ret = syscall(inv, tid+2);
     if(ret < 0) {
-        check_error();
+        check_error(tid);
         pthread_exit((void*)-1);
     } else {
+        printf("[%d] - INV on %d\n", tid, tid+2);
         pthread_exit(0);
     }
 }
 
-int check_input(int argc, char *argv[], int *put, int *get, int *inv){
+int check_input(int argc, char *argv[]){
     if (argc < 4) {
         printf("Usage: ./user <PUT code> <GET code> <INVALIDATE code>");
         return -1;
@@ -100,33 +76,31 @@ int check_input(int argc, char *argv[], int *put, int *get, int *inv){
 
     int ret;
 
-    *put = atoi(argv[1]);
-    *get = atoi(argv[2]);
-    *inv = atoi(argv[3]);
+    put = atoi(argv[1]);
+    get = atoi(argv[2]);
+    inv = atoi(argv[3]);
 
     // test for syscalls existence with invalid params to return a known error
-    ret = syscall(*put, NULL, -1);
+    ret = syscall(put, NULL, -1);
     if(ret == -1 && errno == ENOSYS) printf("Test to PUT returned with error. System call not installed.\n");
 
-    ret = syscall(*get, -1, NULL, -1);
+    ret = syscall(get, -1, NULL, -1);
     if(ret == -1 && errno == ENOSYS) printf("Test to GET returned with error. System call not installed.\n");
 
-    ret = syscall(*inv, -1);
+    ret = syscall(inv, -1);
     if(ret == -1 && errno == ENOSYS) printf("Test to INVALIDATE returned with error. System call not installed.\n");
 
     return 0;
 }
 
-void non_sequential(put_args_t *pa, get_arg_t *ga, inv_args_t *ia){
-    int i, j, block_idx = 0;
+void non_sequential(){
+    int i, j;
     pthread_t tids[NUM_SYSCALLS][THREADS_PER_CALL];
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
-        pthread_create(&tids[0][i], NULL, test_put_data, pa);
-        ga->block = block_idx;
-        pthread_create(&tids[1][i], NULL, test_get_data, ga);
-        ia->block = block_idx++;
-        pthread_create(&tids[2][i], NULL, test_invalidate_data, ia);
+        pthread_create(&tids[0][i], NULL, test_put_data, (void *)&i);
+        pthread_create(&tids[1][i], NULL, test_get_data, (void *)&i);
+        pthread_create(&tids[2][i], NULL, test_invalidate_data, (void *)&i);
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
@@ -137,12 +111,12 @@ void non_sequential(put_args_t *pa, get_arg_t *ga, inv_args_t *ia){
 
 }
 
-void sequential_put(put_args_t *pa, get_arg_t *ga, inv_args_t *ia){
-    int i, j, block_idx = 0;
+void sequential_put(){
+    int i, j;
     pthread_t tids[NUM_SYSCALLS][THREADS_PER_CALL];
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
-        pthread_create(&tids[0][i],NULL,test_put_data,pa);
+        pthread_create(&tids[0][i], NULL, test_put_data, (void *)&i);
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
@@ -150,10 +124,8 @@ void sequential_put(put_args_t *pa, get_arg_t *ga, inv_args_t *ia){
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
-        ga->block = block_idx;
-        pthread_create(&tids[1][i],NULL,test_get_data,ga);
-        ia->block = block_idx++;
-        pthread_create(&tids[2][i],NULL,test_invalidate_data,ia);
+        pthread_create(&tids[1][i],NULL,test_get_data,(void *)&i);
+        pthread_create(&tids[2][i],NULL,test_invalidate_data,(void *)&i);
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
@@ -163,20 +135,20 @@ void sequential_put(put_args_t *pa, get_arg_t *ga, inv_args_t *ia){
     }
 }
 
-void sequential(put_args_t *pa, get_arg_t *ga, inv_args_t *ia){
+void sequential(){
     int i, j;
     pthread_t tids[NUM_SYSCALLS][THREADS_PER_CALL];
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
-        pthread_create(&tids[0][i],NULL,test_put_data,pa);
+        pthread_create(&tids[0][i], NULL, test_put_data, (void *)&i);
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
-        pthread_create(&tids[1][i],NULL,test_get_data,ga);
+        pthread_create(&tids[1][i], NULL, test_get_data, (void *)&i);
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
-        pthread_create(&tids[2][i],NULL,test_invalidate_data,ia);
+        pthread_create(&tids[2][i], NULL, test_invalidate_data, (void *)&i);
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
@@ -188,18 +160,10 @@ void sequential(put_args_t *pa, get_arg_t *ga, inv_args_t *ia){
 
 int main(int argc, char *argv[]){
 
-    int put, get, inv, i;
+    int i;
     char c;
-    if (check_input(argc, argv, &put, &get, &inv)) return -1;
 
-    put_args_t *pa = NULL;
-    get_arg_t *ga = NULL;
-    inv_args_t *ia = NULL;
-    if (prepare_arg_structs(pa, ga, ia)) return -1;
-
-    pa->sysno = put;
-    ga->sysno = get;
-    ia->sysno = inv;
+    if (check_input(argc, argv)) return -1;
 
     printf("Choose a test:\n"
            "\t[1] Sequential calls: n x put, n x get, n x invalidate\n"
@@ -213,18 +177,19 @@ int main(int argc, char *argv[]){
 
     switch(i){
         case 1:
-            sequential(pa, ga, ia);
+            sequential();
             break;
         case 2:
-            sequential_put(pa, ga, ia);
+            sequential_put();
             break;
         case 3:
-            non_sequential(pa, ga, ia);
+            non_sequential();
             break;
         default:
             break;
     }
 
     pthread_barrier_destroy(&barrier);
+
     return 0;
 }
