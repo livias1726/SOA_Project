@@ -74,7 +74,7 @@ typedef struct aos_fs_info {
     uint8_t is_mounted;         /* Change this atomically */
     uint64_t count;             /* Number of thread currently operating on the device */
     uint64_t* free_blocks;      /* Pointer to a bitmap to represent the state of each data block */
-    rwlock_t fb_lock;           /*  */
+    rwlock_t fb_lock;
     seqlock_t *block_locks;
 } aos_fs_info_t;
 #endif

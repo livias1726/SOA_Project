@@ -1,6 +1,6 @@
 all:
-	gcc single_syscalls.c -o single_syscalls
-	gcc multi_syscalls.c -lpthread -o multi_syscalls
+	gcc single_syscalls.c utils.c -o single_syscalls
+	gcc multi_syscalls.c utils.c -lpthread -o multi_syscalls
 	gcc device_ops.c -o device_ops
 
 clean:

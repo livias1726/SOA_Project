@@ -34,10 +34,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    uint64_t* free_map;
+    uint64_t *free_map;
     uint64_t nblocks;
     int i, j, block_index = -1;
-    char * msg;
     size_t ret;
 
     // check if device is mounted
@@ -46,12 +45,17 @@ asmlinkage int sys_put_data(char * source, size_t size){
     // check legal size
     if (size >= sizeof(struct aos_data_block)) return -EINVAL;
 
-    // find a free block
+    // take reader lock on bitmap
     read_lock(&info->fb_lock);
     free_map = info->free_blocks;
     nblocks = info->sb.partition_size;
+
+    // find a free block
     for (i = 0; i < nblocks; i+=64) { // scan 64 bit at a time
+
         if ((*free_map & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
+            AUDIT { printk(KERN_INFO "%s: [put_data()] %d-th 64 blocks are occupied\n",
+                           MODNAME, i); }
             free_map++;
             continue;
         }
@@ -61,35 +65,42 @@ asmlinkage int sys_put_data(char * source, size_t size){
         write_lock(&info->fb_lock);
         for (j = 0; j < 64; ++j) {
             if (!(TEST_BIT(free_map, j))) {
+                AUDIT { printk(KERN_INFO "%s: [put_data()] %d-th bit in %d-th chunk is free\n",
+                               MODNAME, j, i); }
                 block_index = i + j;
                 break;
             }
         }
         break;
     }
-    if(block_index == -1) return -ENOMEM;
+
+    // no free block was found
+    if(block_index == -1) {
+        read_unlock(&info->fb_lock);
+        return -ENOMEM;
+    }
 
     SET_BIT(info->free_blocks, block_index);
     write_unlock(&info->fb_lock);
 
-    // alloc area to retrieve message from user
-    msg = kzalloc(size, GFP_KERNEL);
-    if (!msg) return -ENOMEM;
-    // retrieve message from user
-    ret = copy_from_user(msg, source, size);
-    size -= ret;
-    msg[size+1] = '\0';
-
+    // alloc block area to retrieve message from user
     data_block = kmalloc(sizeof(struct aos_data_block), GFP_KERNEL);
     if (!data_block) return -ENOMEM;
+
+    // retrieve message from user
+    ret = copy_from_user(data_block->data.msg, source, size);
+    size -= ret;
+    data_block->data.msg[size+1] = '\0';
     data_block->metadata.is_valid = 1;
-    memcpy(data_block->data.msg, msg, size);
+
+    // take writer lock on data block
+    write_seqlock(&info->block_locks[block_index]);
 
     // get data block in page cache buffer
-    write_seqlock(&info->block_locks[block_index]);
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
-        kfree(msg);
+        write_sequnlock(&info->block_locks[block_index]);
+        kfree(data_block);
         return -EIO;
     }
 
@@ -102,7 +113,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     brelse(bh);
     write_sequnlock(&info->block_locks[block_index]);
 
-    kfree(msg);
+    kfree(data_block);
 
     AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful - written %lu bytes in block %d\n",
                    MODNAME, size, block_index); }
@@ -205,7 +216,7 @@ asmlinkage int sys_invalidate_data(uint64_t offset){
 
     // invalidate data
     write_seqlock(&info->block_locks[offset]);
-    data_block->metadata.is_valid = 0;
+    data_block->metadata.is_valid = 0; // todo: check if invalid bit is set correctly
     mark_buffer_dirty(bh);
     brelse(bh);
     write_sequnlock(&info->block_locks[offset]);
