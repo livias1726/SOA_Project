@@ -87,11 +87,12 @@ asmlinkage int sys_put_data(char * source, size_t size){
     }
 
     SET_BIT(info->free_blocks, block_index);
-    write_unlock(&info->fb_lock);
 
     // alloc block area to retrieve message from user
     data_block = kmalloc(sizeof(struct aos_data_block), GFP_KERNEL);
     if (!data_block) {
+        CLEAR_BIT(info->free_blocks, block_index);
+        write_unlock(&info->fb_lock);
         __sync_fetch_and_sub(&info->count, 1);
         return -ENOMEM;
     }
@@ -108,11 +109,15 @@ asmlinkage int sys_put_data(char * source, size_t size){
     // get data block in page cache buffer
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
+        CLEAR_BIT(info->free_blocks, block_index);
+        write_unlock(&info->fb_lock);
         write_sequnlock(&info->block_locks[block_index]);
         __sync_fetch_and_sub(&info->count, 1);
         kfree(data_block);
         return -EIO;
     }
+
+    write_unlock(&info->fb_lock);
 
     memcpy(bh->b_data, data_block, sizeof(*data_block));
     mark_buffer_dirty(bh);
@@ -120,11 +125,11 @@ asmlinkage int sys_put_data(char * source, size_t size){
     AUDIT { printk(KERN_INFO "%s: [put_data()] forcing synchronization on page cache\n", MODNAME); }
     sync_dirty_buffer(bh); // immediate synchronous write on the device
 #endif
+
+    // release resources
     brelse(bh);
     write_sequnlock(&info->block_locks[block_index]);
-
     __sync_fetch_and_sub(&info->count, 1);
-
     kfree(data_block);
 
     AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful - written %lu bytes in block %d\n",
@@ -177,7 +182,10 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     } while (read_seqretry(&info->block_locks[offset], seq));
 
     // check data validity
-    if (!data_block.metadata.is_valid) return -ENODATA;
+    if (!data_block.metadata.is_valid) {
+        __sync_fetch_and_sub(&info->count, 1);
+        return -ENODATA;
+    }
 
     msg = data_block.data.msg;
     len = strlen(msg);
@@ -234,10 +242,10 @@ asmlinkage int sys_invalidate_data(uint64_t offset){
         }
         data_block = (struct aos_data_block*)bh->b_data;
 
-        if (!data_block->metadata.is_valid) {
+        if (!data_block->metadata.is_valid) { // the block does not contain valid data
             brelse(bh);
             __sync_fetch_and_sub(&info->count, 1);
-            return -ENODATA; // no valid data
+            return -ENODATA;
         }
     } while (read_seqretry(&info->block_locks[offset], seq));
 

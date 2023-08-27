@@ -49,6 +49,9 @@ Since each inode can have only one data block:
 * each directory can only have AOS_MAX_RECORDS children
 * NBLOCKS <= AOS_MAX_INODES
 
-### Upgrade ###
+# Concurrency #
 
-Indirect blocks
+## Seqlocks and Reader/Writer locks ##
+
+Seqlocks: 
+Readers never block a writer, but they must retry if a writer is in progress by detecting change in the sequence number.

@@ -115,26 +115,45 @@ void sequential(){
     }
 }
 
+void single_call(void* func(void*)) {
+    int i;
+    pthread_t tids[THREADS_PER_CALL];
+    for (i = 0; i < THREADS_PER_CALL; ++i) pthread_create(&tids[i], NULL, func, (void *)&i);
+    for (i = 0; i < THREADS_PER_CALL; ++i) pthread_join(tids[i], NULL);
+}
+
 int main(int argc, char *argv[]){
 
     if (check_input(argc, argv)) return -1;
 
     printf("Choose a test:\n"
-           "\t[1] Sequential calls: n x put, n x get, n x invalidate\n"
-           "\t[2] Sequential put: n x put, n x (get, invalidate)\n"
-           "\t[3] Non-sequential: n x (put, get, invalidate)\n"
+           "\t[1] Only put\n"
+           "\t[2] Only get\n"
+           "\t[3] Only invalidate\n"
+           "\t[4] Sequential calls: n x put, n x get, n x invalidate\n"
+           "\t[5] Sequential put: n x put, n x (get, invalidate)\n"
+           "\t[6] Non-sequential: n x (put, get, invalidate)\n"
            "\t[other] Exit\n");
 
     pthread_barrier_init(&barrier, NULL, NUM_SYSCALLS*THREADS_PER_CALL);
 
     switch(getint()){
         case 1:
-            sequential();
+            single_call(test_put_data);
             break;
         case 2:
-            sequential_put();
+            single_call(test_get_data);
             break;
         case 3:
+            single_call(test_invalidate_data);
+            break;
+        case 4:
+            sequential();
+            break;
+        case 5:
+            sequential_put();
+            break;
+        case 6:
             non_sequential();
             break;
         default:
