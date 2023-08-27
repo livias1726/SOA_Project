@@ -6,6 +6,7 @@
 #include <linux/types.h>
 #include <linux/spinlock.h>
 #include <linux/seqlock.h>
+#include <linux/slab.h>
 #endif
 
 #define MAGIC 0x42424242

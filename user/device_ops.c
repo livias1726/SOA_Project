@@ -31,7 +31,7 @@ int main(){
     }
     ret = read(fd, buf, DEVICE_SIZE);
     CHECK(ret)
-    printf("\tDevice content is: %s\n", buf);
+    printf("\t%d bytes read. Device content is: %s\n", ret, buf);
     free(buf);
 
     printf("3. Closing the device: ");

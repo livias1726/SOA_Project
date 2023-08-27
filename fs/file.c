@@ -57,55 +57,79 @@ int aos_release(struct inode *inode, struct file *filp){
 }
 
 /*
- * Reads count bytes from a file starting at position *f_pos; the value *f_pos (which usually corresponds to
- * the file pointer) is then increased. To deliver the content chronologically, the file pointer should be
- * updated to always point at the start of the oldest valid data.
- *
- * A read operation should only return data related to messages not invalidated before the access in read mode to
- * the corresponding block of the device in an I/O session.
+ * Reads 'count' bytes from the device starting from the oldest message; the value *f_pos (which usually corresponds to
+ * the file pointer) is ignored.
+ * todo The content must be delivered chronologically and the operation should only return data related to messages
+ *  not invalidated before the access in read mode to the corresponding block of the device in an I/O session.
  * */
+// noteme: test reading non chronologically
 ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 
-    struct buffer_head *bh = NULL;
-    struct inode *the_inode = filp->f_inode;
-    uint64_t file_size = the_inode->i_size;
-    int ret;
+    struct buffer_head *bh;
+    struct aos_super_block aos_sb;
+    struct aos_data_block data_block;
+    int i, len, ret, nblocks;
+    unsigned int seq;
+    char *msg, *block_msg;
     loff_t offset;
-    int block_to_read;  //index of the block to be read from device
 
-    if(!info->is_mounted) {
-        printk(KERN_WARNING "%s: [aos_read()] operation failed - fs not mounted.\n", MODNAME);
-        return -ENODEV;
+    // check if device is mounted
+    if (!info->is_mounted) return -ENODEV;
+
+    printk(KERN_INFO "%s: read operation called by thread %d", MODNAME, current->pid);
+
+    aos_sb = info->sb;
+    nblocks = aos_sb.partition_size;
+
+    msg = kzalloc(count, GFP_KERNEL);
+    offset = 0;
+    for (i = 2; i < nblocks; ++i) {
+        do {
+            seq = read_seqbegin(&info->block_locks[i]);
+            // get data block in page cache buffer
+            bh = sb_bread(info->vfs_sb, i);
+            if(!bh) {
+                __sync_fetch_and_sub(&info->count, 1);
+                kfree(msg);
+                return -EIO;
+            }
+            memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
+            brelse(bh);
+        } while (read_seqretry(&info->block_locks[i], seq));
+
+        // check data validity
+        if (!data_block.metadata.is_valid) continue;
+
+        // check data availability
+        block_msg = data_block.data.msg;
+        len = strlen(block_msg);
+        if (len == 0) continue;
+
+        printk(KERN_INFO "%s: read operation must access block %d of the device", MODNAME, i);
+
+        if ((offset + len) > count) { // last block to read
+            len = count - offset;
+            if (len > 0) {
+                memcpy(msg + offset, block_msg, len);
+                offset += len;
+            }
+            break;
+        } else {
+            memcpy(msg + offset, block_msg, len);
+            offset += len;
+            memcpy(msg + offset, "\n", 1);
+            offset += 1;
+        }
     }
 
-    printk(KERN_INFO "%s: read operation called with len %ld and offset %lld (the current file size is %lld)",
-           MODNAME, count, *f_pos, file_size);
-
-    // check boundaries
-    if (*f_pos >= file_size) {
-        return 0;   // specified offset is over file size
-    }else if (*f_pos + count > file_size) {
-        count = file_size - *f_pos; // number of bytes requested are over file size: trim count
+    if(offset > 0){
+        ret = copy_to_user(buf, msg, offset);
+    } else {
+        ret = 0;
     }
 
-    // determine the block level offset for the operation
-    offset = *f_pos % AOS_BLOCK_SIZE;
-    // just read stuff in a single block - residuals will be managed at the application level
-    if (offset + count > AOS_BLOCK_SIZE) count = AOS_BLOCK_SIZE - offset;
-
-    // compute the actual index of the block to be read from device
-    block_to_read = (*f_pos / AOS_BLOCK_SIZE) + 2; //the value 2 accounts for superblock and file-inode on device
-
-    printk(KERN_INFO "%s: read operation must access block %d of the device", MODNAME, block_to_read);
-
-    bh = (struct buffer_head *)sb_bread(filp->f_path.dentry->d_inode->i_sb, block_to_read);
-    if(!bh) return -EIO;
-
-    ret = copy_to_user(buf,bh->b_data + offset, count);
-    *f_pos += (count - ret);
-    brelse(bh);
-
-    return count - ret;
+    kfree(msg);
+    return (offset - ret);
 }
 
 /*

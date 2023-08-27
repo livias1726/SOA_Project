@@ -42,8 +42,13 @@ asmlinkage int sys_put_data(char * source, size_t size){
     // check if device is mounted
     if (!info->is_mounted) return -ENODEV;
 
+    __sync_fetch_and_add(&info->count, 1);
+
     // check legal size
-    if (size >= sizeof(struct aos_data_block)) return -EINVAL;
+    if (size >= sizeof(struct aos_data_block)) {
+        __sync_fetch_and_sub(&info->count, 1);
+        return -EINVAL;
+    }
 
     // take reader lock on bitmap
     read_lock(&info->fb_lock);
@@ -77,6 +82,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     // no free block was found
     if(block_index == -1) {
         read_unlock(&info->fb_lock);
+        __sync_fetch_and_sub(&info->count, 1);
         return -ENOMEM;
     }
 
@@ -85,7 +91,10 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     // alloc block area to retrieve message from user
     data_block = kmalloc(sizeof(struct aos_data_block), GFP_KERNEL);
-    if (!data_block) return -ENOMEM;
+    if (!data_block) {
+        __sync_fetch_and_sub(&info->count, 1);
+        return -ENOMEM;
+    }
 
     // retrieve message from user
     ret = copy_from_user(data_block->data.msg, source, size);
@@ -100,6 +109,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
         write_sequnlock(&info->block_locks[block_index]);
+        __sync_fetch_and_sub(&info->count, 1);
         kfree(data_block);
         return -EIO;
     }
@@ -112,6 +122,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     brelse(bh);
     write_sequnlock(&info->block_locks[block_index]);
+
+    __sync_fetch_and_sub(&info->count, 1);
 
     kfree(data_block);
 
@@ -143,15 +155,23 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     // check if device is mounted
     if (!info->is_mounted) return -ENODEV;
 
+    __sync_fetch_and_add(&info->count, 1);
+
     // check parameters
     aos_sb = info->sb;
-    if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.block_size) return -EINVAL;
+    if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.block_size) {
+        __sync_fetch_and_sub(&info->count, 1);
+        return -EINVAL;
+    }
 
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
         // get data block in page cache buffer
         bh = sb_bread(info->vfs_sb, offset);
-        if(!bh) return -EIO;
+        if(!bh) {
+            __sync_fetch_and_sub(&info->count, 1);
+            return -EIO;
+        }
         memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
         brelse(bh);
     } while (read_seqretry(&info->block_locks[offset], seq));
@@ -162,6 +182,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     msg = data_block.data.msg;
     len = strlen(msg);
     if (len == 0) {
+        __sync_fetch_and_sub(&info->count, 1);
         return 0; // no available data
     } else if (len < size) {
         size = len;
@@ -170,6 +191,8 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     // try to read 'size' bytes of data starting from 'offset' into 'destination'
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
+
+    __sync_fetch_and_sub(&info->count, 1);
 
     AUDIT { printk(KERN_INFO "%s: [get_data()] system call was successful - read %d bytes in block %llu\n",
                    MODNAME, loaded_bytes, offset); }
@@ -193,18 +216,27 @@ asmlinkage int sys_invalidate_data(uint64_t offset){
     // check if device is mounted
     if (!info->is_mounted) return -ENODEV;
 
+    __sync_fetch_and_add(&info->count, 1);
+
     // check legal operation
-    if (offset < 2 || offset > info->sb.partition_size) return -EINVAL;
+    if (offset < 2 || offset > info->sb.partition_size) {
+        __sync_fetch_and_sub(&info->count, 1);
+        return -EINVAL;
+    }
 
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
         // get data block in page cache buffer
         bh = sb_bread(info->vfs_sb, offset);
-        if(!bh) return -EIO;
+        if(!bh) {
+            __sync_fetch_and_sub(&info->count, 1);
+            return -EIO;
+        }
         data_block = (struct aos_data_block*)bh->b_data;
 
         if (!data_block->metadata.is_valid) {
             brelse(bh);
+            __sync_fetch_and_sub(&info->count, 1);
             return -ENODATA; // no valid data
         }
     } while (read_seqretry(&info->block_locks[offset], seq));
@@ -220,6 +252,8 @@ asmlinkage int sys_invalidate_data(uint64_t offset){
     mark_buffer_dirty(bh);
     brelse(bh);
     write_sequnlock(&info->block_locks[offset]);
+
+    __sync_fetch_and_sub(&info->count, 1);
 
     AUDIT { printk(KERN_INFO "%s: [invalidate_data()] system call was successful - invalidated block %llu\n",
                    MODNAME, offset); }
