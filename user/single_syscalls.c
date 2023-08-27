@@ -1,11 +1,32 @@
 #include "user.h"
 
+char* msgs[] = {LOREM, EMERALD, LUCIFER};
+int sizes[] = {SIZE_LOREM, SIZE_EMERALD, SIZE_LUCIFER};
+
 void test_put_data(){
-    int ret, size;
+    int ret, size, idx;
     char *msg;
 
-    msg = malloc(SIZE_LOREM);
-    memcpy(msg, LOREM, SIZE_LOREM);
+    printf("Choose a message:\n"
+           "\t[1] Example text\n"
+           "\t[2] Emerald tablet\n"
+           "\t[3] Dante's Lucifer\n"
+           "\t[other] Custom\n");
+    idx = getint();
+
+    switch(idx){
+        case 1:
+        case 2:
+        case 3:
+            idx--;
+            msg = malloc(sizes[idx]);
+            memcpy(msg, msgs[idx], sizes[idx]);
+            break;
+        default:
+            printf("Insert a message: ");
+            scanf("%s", msg);
+    }
+
     size = strlen(msg);
 
     printf("Test parameters:\n\tsource = \"%s\"\n\tsize = %d\n", msg, size);

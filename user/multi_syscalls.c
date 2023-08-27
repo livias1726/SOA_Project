@@ -1,10 +1,14 @@
 #include "user.h"
 
-void* test_put_data(void *arg){
-    int ret, size, tid = *(int*)arg;
-    char *msg = malloc(SIZE_LOREM);
+char* msgs[] = {LOREM, EMERALD, LUCIFER};
+int sizes[] = {SIZE_LOREM, SIZE_EMERALD, SIZE_LUCIFER};
 
-    memcpy(msg, LOREM, SIZE_LOREM);
+void* test_put_data(void *arg){
+    int ret, size, tid = *(int*)arg, idx = rand()%3;
+    char *msg;
+
+    msg = malloc(sizes[idx]);
+    memcpy(msg, msgs[idx], sizes[idx]);
     size = strlen(msg);
 
     ret = syscall(put, msg, size);
