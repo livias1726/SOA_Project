@@ -36,18 +36,21 @@ asmlinkage int sys_put_data(char * source, size_t size){
     struct aos_data_block *data_block;
     uint64_t *free_map;
     uint64_t nblocks;
-    int i, j, block_index = -1;
+    int i, j, fail, block_index = -1;
     size_t ret;
 
     // check if device is mounted
-    if (!info->is_mounted) return -ENODEV;
+    if (!info->is_mounted) {
+        fail = -ENODEV;
+        goto dev_fail;
+    }
 
     __sync_fetch_and_add(&info->count, 1);
 
     // check legal size
     if (size >= sizeof(struct aos_data_block)) {
-        __sync_fetch_and_sub(&info->count, 1);
-        return -EINVAL;
+        fail = -EINVAL;
+        goto size_fail;
     }
 
     // take reader lock on bitmap
@@ -59,19 +62,17 @@ asmlinkage int sys_put_data(char * source, size_t size){
     for (i = 0; i < nblocks; i+=64) { // scan 64 bit at a time
 
         if ((*free_map & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
-            AUDIT { printk(KERN_INFO "%s: [put_data()] %d-th 64 blocks are occupied\n",
-                           MODNAME, i); }
+            AUDIT{ printk(KERN_INFO "%s: %d (%p) full\n", MODNAME, i, free_map); }
             free_map++;
             continue;
         }
 
-        // found bit block with a bit unset
+        // found block with a bit unset
         read_unlock(&info->fb_lock);
         write_lock(&info->fb_lock);
         for (j = 0; j < 64; ++j) {
             if (!(TEST_BIT(free_map, j))) {
-                AUDIT { printk(KERN_INFO "%s: [put_data()] %d-th bit in %d-th chunk is free\n",
-                               MODNAME, j, i); }
+                AUDIT{ printk(KERN_INFO "%s: %d, %d (%p) free\n", MODNAME, i, j, free_map); }
                 block_index = i + j;
                 break;
             }
@@ -81,9 +82,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     // no free block was found
     if(block_index == -1) {
+        fail = -ENOMEM;
         read_unlock(&info->fb_lock);
-        __sync_fetch_and_sub(&info->count, 1);
-        return -ENOMEM;
+        goto unavail_fail;
     }
 
     SET_BIT(info->free_blocks, block_index);
@@ -91,10 +92,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
     // alloc block area to retrieve message from user
     data_block = kmalloc(sizeof(struct aos_data_block), GFP_KERNEL);
     if (!data_block) {
-        CLEAR_BIT(info->free_blocks, block_index);
-        write_unlock(&info->fb_lock);
-        __sync_fetch_and_sub(&info->count, 1);
-        return -ENOMEM;
+        fail = -ENOMEM;
+        goto block_fail;
     }
 
     // retrieve message from user
@@ -109,12 +108,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
     // get data block in page cache buffer
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
-        CLEAR_BIT(info->free_blocks, block_index);
-        write_unlock(&info->fb_lock);
-        write_sequnlock(&info->block_locks[block_index]);
-        __sync_fetch_and_sub(&info->count, 1);
-        kfree(data_block);
-        return -EIO;
+        fail = -EIO;
+        goto buff_fail;
     }
 
     write_unlock(&info->fb_lock);
@@ -136,6 +131,18 @@ asmlinkage int sys_put_data(char * source, size_t size){
                    MODNAME, size, block_index); }
 
     return block_index;
+
+    buff_fail:
+        kfree(data_block);
+        write_sequnlock(&info->block_locks[block_index]);
+    block_fail:
+        CLEAR_BIT(info->free_blocks, block_index);
+        write_unlock(&info->fb_lock);
+    unavail_fail:
+    size_fail:
+        __sync_fetch_and_sub(&info->count, 1);
+    dev_fail:
+        return fail;
 }
 
 /**
@@ -152,7 +159,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int loaded_bytes, len;
+    int loaded_bytes, len, fail;
     unsigned int seq;
     char * msg;
     size_t ret;
@@ -165,8 +172,8 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     // check parameters
     aos_sb = info->sb;
     if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.block_size) {
-        __sync_fetch_and_sub(&info->count, 1);
-        return -EINVAL;
+        fail = -EINVAL;
+        goto failure;
     }
 
     do {
@@ -174,8 +181,8 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
         // get data block in page cache buffer
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
-            __sync_fetch_and_sub(&info->count, 1);
-            return -EIO;
+            fail = -EIO;
+            goto failure;
         }
         memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
         brelse(bh);
@@ -183,15 +190,15 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     // check data validity
     if (!data_block.metadata.is_valid) {
-        __sync_fetch_and_sub(&info->count, 1);
-        return -ENODATA;
+        fail = -ENODATA;
+        goto failure;
     }
 
     msg = data_block.data.msg;
     len = strlen(msg);
-    if (len == 0) {
-        __sync_fetch_and_sub(&info->count, 1);
-        return 0; // no available data
+    if (len == 0) { // no available data
+        fail = 0;
+        goto failure;
     } else if (len < size) {
         size = len;
     }
@@ -200,12 +207,14 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
 
-    __sync_fetch_and_sub(&info->count, 1);
-
     AUDIT { printk(KERN_INFO "%s: [get_data()] system call was successful - read %d bytes in block %llu\n",
                    MODNAME, loaded_bytes, offset); }
 
-    return loaded_bytes;
+    fail = loaded_bytes;
+
+    failure:
+        __sync_fetch_and_sub(&info->count, 1);
+        return fail;
 }
 
 /**
