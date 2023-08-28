@@ -34,9 +34,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    uint64_t *free_map;
+    uint32_t *free_map;
     uint64_t nblocks;
-    int i, j, fail, block_index = -1;
+    int i, j, fail, lim, block_index = -1;
     size_t ret;
 
     // check if device is mounted
@@ -59,9 +59,15 @@ asmlinkage int sys_put_data(char * source, size_t size){
     nblocks = info->sb.partition_size;
 
     // find a free block
-    for (i = 0; i < nblocks; i+=64) { // scan 64 bit at a time
+    for (i = 2; i < nblocks; ++i/*i+=64*/) { // scan 64 bit at a time
+        AUDIT{ printk(KERN_INFO "%s: %d (%p) - %u\n", MODNAME, i, free_map, TEST_BIT(free_map, i)); }
+        if (!(TEST_BIT(free_map, i))) {
+            block_index = i;
+            break;
+        }
 
-        if ((*free_map & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
+        /*
+        if (((*free_map) & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
             AUDIT{ printk(KERN_INFO "%s: %d (%p) full\n", MODNAME, i, free_map); }
             free_map++;
             continue;
@@ -78,6 +84,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
             }
         }
         break;
+         */
     }
 
     // no free block was found
@@ -222,9 +229,9 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
  * @return ENODATA error if no data is currently valid and associated with the offset parameter
  * */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
-__SYSCALL_DEFINEx(1, _invalidate_data, uint64_t, offset){
+__SYSCALL_DEFINEx(1, _invalidate_data, uint32_t, offset){
 #else
-asmlinkage int sys_invalidate_data(uint64_t offset){
+asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;

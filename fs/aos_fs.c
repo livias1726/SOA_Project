@@ -21,11 +21,14 @@ static struct dentry_operations aos_de_ops = {
 aos_fs_info_t *info;
 
 static int init_fs_info(struct aos_super_block* aos_sb) {
-    // build free blocks bitmap as an array of uint64_t
-    int nblocks = aos_sb->partition_size;
-    int i, nbytes = (ROUND_UP(nblocks, 64)) * 8;
 
-    info->free_blocks = kzalloc(nbytes, GFP_KERNEL);
+    int nblocks = aos_sb->partition_size;
+    int ulongs = ROUND_UP(nblocks, 32);
+    int lim;
+    int i;
+
+    // build free blocks bitmap as an array of uint64_t
+    info->free_blocks = kzalloc(ulongs * sizeof(uint32_t), GFP_KERNEL);
     if (!info->free_blocks) {
         printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
         return -ENOMEM;
@@ -34,13 +37,20 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     // set first two blocks as used (superblock and inode block)
     SET_BIT(info->free_blocks, 0);
     SET_BIT(info->free_blocks, 1);
+    lim = ulongs * 32;
+    for (i = nblocks; i < lim; ++i) { // limits access by put to the unavailable blocks
+        AUDIT{ printk(KERN_INFO "%s: setting %d - %u\n", MODNAME, i, TEST_BIT(info->free_blocks, i)); }
+        SET_BIT(info->free_blocks, i);
+        AUDIT{ printk(KERN_INFO "%s: set %d - %u\n", MODNAME, i, TEST_BIT(info->free_blocks, i)); }
+    }
 
     rwlock_init(&info->fb_lock);
 
-    nbytes = nblocks * sizeof(seqlock_t);
-    info->block_locks = (seqlock_t *)kzalloc(nbytes, GFP_KERNEL);
+    // init every seqlock associated to each block
+    info->block_locks = (seqlock_t *)kzalloc(nblocks * sizeof(seqlock_t), GFP_KERNEL);
     if (!info->block_locks) {
         printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate seqlocks\n", MODNAME);
+        kfree(info->free_blocks);
         return -ENOMEM;
     }
 
