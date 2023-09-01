@@ -120,7 +120,6 @@ void single_call(void* func(void*)) {
     pthread_t tids[THREADS_PER_CALL];
     for (i = 0; i < THREADS_PER_CALL; ++i) {
         pthread_create(&tids[i], NULL, func, (void *)&i);
-        sleep(1);
     }
     for (i = 0; i < THREADS_PER_CALL; ++i) pthread_join(tids[i], NULL);
 }

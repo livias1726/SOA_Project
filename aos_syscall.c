@@ -34,8 +34,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    uint32_t *free_map;
-    uint64_t nblocks;
+    uint64_t *free_map;
     int i, j, fail, lim, block_index = -1;
     size_t ret;
 
@@ -56,35 +55,25 @@ asmlinkage int sys_put_data(char * source, size_t size){
     // take reader lock on bitmap
     read_lock(&info->fb_lock);
     free_map = info->free_blocks;
-    nblocks = info->sb.partition_size;
+    lim = ROUND_UP(info->sb.partition_size, 64);
 
     // find a free block
-    for (i = 2; i < nblocks; ++i/*i+=64*/) { // scan 64 bit at a time
-        AUDIT{ printk(KERN_INFO "%s: %d (%p) - %u\n", MODNAME, i, free_map, TEST_BIT(free_map, i)); }
-        if (!(TEST_BIT(free_map, i))) {
-            block_index = i;
-            break;
-        }
+    for (i = 0; i < lim; ++i) { // scan 64 bit at a time
 
-        /*
-        if (((*free_map) & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
-            AUDIT{ printk(KERN_INFO "%s: %d (%p) full\n", MODNAME, i, free_map); }
-            free_map++;
-            continue;
-        }
+        if ((free_map[i] & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) continue;
 
         // found block with a bit unset
         read_unlock(&info->fb_lock);
         write_lock(&info->fb_lock);
-        for (j = 0; j < 64; ++j) {
+        j = i * 64;
+        lim = j + 64;
+        for (; j < lim; ++j) {
             if (!(TEST_BIT(free_map, j))) {
-                AUDIT{ printk(KERN_INFO "%s: %d, %d (%p) free\n", MODNAME, i, j, free_map); }
-                block_index = i + j;
+                block_index = j;
                 break;
             }
         }
         break;
-         */
     }
 
     // no free block was found
@@ -235,17 +224,21 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
+    int fail;
     unsigned int seq;
 
     // check if device is mounted
-    if (!info->is_mounted) return -ENODEV;
+    if (!info->is_mounted) {
+        fail = -ENODEV;
+        goto dev_fail;
+    }
 
     __sync_fetch_and_add(&info->count, 1);
 
     // check legal operation
     if (offset < 2 || offset > info->sb.partition_size) {
-        __sync_fetch_and_sub(&info->count, 1);
-        return -EINVAL;
+        fail = -EINVAL;
+        goto param_fail;
     }
 
     do {
@@ -253,15 +246,14 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         // get data block in page cache buffer
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
-            __sync_fetch_and_sub(&info->count, 1);
-            return -EIO;
+            fail = -EIO;
+            goto param_fail;
         }
         data_block = (struct aos_data_block*)bh->b_data;
 
         if (!data_block->metadata.is_valid) { // the block does not contain valid data
-            brelse(bh);
-            __sync_fetch_and_sub(&info->count, 1);
-            return -ENODATA;
+            fail = -ENODATA;
+            goto buffer_fail;
         }
     } while (read_seqretry(&info->block_locks[offset], seq));
 
@@ -274,15 +266,19 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     write_seqlock(&info->block_locks[offset]);
     data_block->metadata.is_valid = 0; // todo: check if invalid bit is set correctly
     mark_buffer_dirty(bh);
-    brelse(bh);
-    write_sequnlock(&info->block_locks[offset]);
 
-    __sync_fetch_and_sub(&info->count, 1);
-
-    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] system call was successful - invalidated block %llu\n",
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] system call was successful - invalidated block %u\n",
                    MODNAME, offset); }
 
-    return 0;
+    write_sequnlock(&info->block_locks[offset]);
+    fail = 0;
+
+    buffer_fail:
+        brelse(bh);
+    param_fail:
+        __sync_fetch_and_sub(&info->count, 1);
+    dev_fail:
+        return fail;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)

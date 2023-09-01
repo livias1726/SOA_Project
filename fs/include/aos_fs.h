@@ -16,18 +16,12 @@
 #define FILENAME_MAXLEN 255
 #define ROOT_INODE_NUMBER 10
 #define FILE_INODE_NUMBER 1
-//#define FULL_MAP_ENTRY 0xffffffffffffffff
-#define FULL_MAP_ENTRY 0xffffffff
+#define FULL_MAP_ENTRY 0xffffffffffffffff
 
-#define SET_BIT(map,k) map[(k)/32] |= (1 << ((k)%32))
-#define CLEAR_BIT(map,k) map[(k)/32] &= ~(1 << ((k)%32))
-#define TEST_BIT(map,k) map[(k)/32] & (1 << ((k)%32))
+#define SET_BIT(map,k) map[(k)/64] |= (1ULL << ((k)%64))
+#define CLEAR_BIT(map,k) map[(k)/64] &= ~(1ULL << ((k)%64))
+#define TEST_BIT(map,k) (map[(k)/64] >> ((k)%64)) & 1ULL
 
-/*
-#define SET_BIT(map,k) map[(k)/64] |= (1 << ((k)%64))
-#define CLEAR_BIT(map,k) map[(k)/64] &= ~(1 << ((k)%64))
-#define TEST_BIT(map,k) map[(k)/64] & (1 << ((k)%64))
- */
 #define ROUND_UP(a,b) (a+b-1)/b
 
 #define DEVICE_NAME "the-device"
@@ -81,8 +75,7 @@ typedef struct aos_fs_info {
     struct aos_super_block sb;  /* AOS super block structure */
     uint8_t is_mounted;         /* Change this atomically */
     uint64_t count;             /* Number of thread currently operating on the device */
-    //uint64_t* free_blocks;      /* Pointer to a bitmap to represent the state of each data block */
-    uint32_t* free_blocks;
+    uint64_t* free_blocks;      /* Pointer to a bitmap to represent the state of each data block */
     rwlock_t fb_lock;
     seqlock_t *block_locks;
 } aos_fs_info_t;

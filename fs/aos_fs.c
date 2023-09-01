@@ -23,12 +23,12 @@ aos_fs_info_t *info;
 static int init_fs_info(struct aos_super_block* aos_sb) {
 
     int nblocks = aos_sb->partition_size;
-    int ulongs = ROUND_UP(nblocks, 32);
+    int ulongs = ROUND_UP(nblocks, 64);
     int lim;
     int i;
 
     // build free blocks bitmap as an array of uint64_t
-    info->free_blocks = kzalloc(ulongs * sizeof(uint32_t), GFP_KERNEL);
+    info->free_blocks = kzalloc(ulongs * sizeof(uint64_t), GFP_KERNEL);
     if (!info->free_blocks) {
         printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
         return -ENOMEM;
@@ -37,11 +37,11 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     // set first two blocks as used (superblock and inode block)
     SET_BIT(info->free_blocks, 0);
     SET_BIT(info->free_blocks, 1);
-    lim = ulongs * 32;
+    lim = ulongs * 64;
     for (i = nblocks; i < lim; ++i) { // limits access by put to the unavailable blocks
-        AUDIT{ printk(KERN_INFO "%s: setting %d - %u\n", MODNAME, i, TEST_BIT(info->free_blocks, i)); }
+        AUDIT{ printk(KERN_INFO "%s: setting %d - %llu\n", MODNAME, i, TEST_BIT(info->free_blocks, i)); }
         SET_BIT(info->free_blocks, i);
-        AUDIT{ printk(KERN_INFO "%s: set %d - %u\n", MODNAME, i, TEST_BIT(info->free_blocks, i)); }
+        AUDIT{ printk(KERN_INFO "%s: set %d - %llu\n", MODNAME, i, TEST_BIT(info->free_blocks, i)); }
     }
 
     rwlock_init(&info->fb_lock);
