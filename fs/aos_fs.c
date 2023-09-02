@@ -39,9 +39,7 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     SET_BIT(info->free_blocks, 1);
     lim = ulongs * 64;
     for (i = nblocks; i < lim; ++i) { // limits access by put to the unavailable blocks
-        AUDIT{ printk(KERN_INFO "%s: setting %d - %llu\n", MODNAME, i, TEST_BIT(info->free_blocks, i)); }
         SET_BIT(info->free_blocks, i);
-        AUDIT{ printk(KERN_INFO "%s: set %d - %llu\n", MODNAME, i, TEST_BIT(info->free_blocks, i)); }
     }
 
     rwlock_init(&info->fb_lock);

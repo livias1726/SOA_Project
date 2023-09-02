@@ -24,7 +24,7 @@ void test_put_data(){
             break;
         default:
             printf("Insert a message: ");
-            scanf("%s", msg);
+            scanf("%s", msg); // fixme: segfault
     }
 
     size = strlen(msg);

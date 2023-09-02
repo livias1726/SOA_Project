@@ -39,32 +39,27 @@ asmlinkage int sys_put_data(char * source, size_t size){
     size_t ret;
 
     // check if device is mounted
-    if (!info->is_mounted) {
-        fail = -ENODEV;
-        goto dev_fail;
-    }
+    if (!info->is_mounted) return -ENODEV;
 
     __sync_fetch_and_add(&info->count, 1);
 
     // check legal size
-    if (size >= sizeof(struct aos_data_block)) {
+    if (size+1 >= sizeof(struct aos_data_block)) {
         fail = -EINVAL;
-        goto size_fail;
+        goto failure;
     }
 
-    // take reader lock on bitmap
-    read_lock(&info->fb_lock);
+    // read bitmap
     free_map = info->free_blocks;
     lim = ROUND_UP(info->sb.partition_size, 64);
 
+    read_lock(&info->fb_lock);
     // find a free block
     for (i = 0; i < lim; ++i) { // scan 64 bit at a time
 
         if ((free_map[i] & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) continue;
 
         // found block with a bit unset
-        read_unlock(&info->fb_lock);
-        write_lock(&info->fb_lock);
         j = i * 64;
         lim = j + 64;
         for (; j < lim; ++j) {
@@ -75,21 +70,19 @@ asmlinkage int sys_put_data(char * source, size_t size){
         }
         break;
     }
+    read_unlock(&info->fb_lock);
 
     // no free block was found
     if(block_index == -1) {
         fail = -ENOMEM;
-        read_unlock(&info->fb_lock);
-        goto unavail_fail;
+        goto failure;
     }
-
-    SET_BIT(info->free_blocks, block_index);
 
     // alloc block area to retrieve message from user
     data_block = kmalloc(sizeof(struct aos_data_block), GFP_KERNEL);
     if (!data_block) {
         fail = -ENOMEM;
-        goto block_fail;
+        goto failure;
     }
 
     // retrieve message from user
@@ -98,9 +91,6 @@ asmlinkage int sys_put_data(char * source, size_t size){
     data_block->data.msg[size+1] = '\0';
     data_block->metadata.is_valid = 1;
 
-    // take writer lock on data block
-    write_seqlock(&info->block_locks[block_index]);
-
     // get data block in page cache buffer
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
@@ -108,9 +98,14 @@ asmlinkage int sys_put_data(char * source, size_t size){
         goto buff_fail;
     }
 
-    write_unlock(&info->fb_lock);
+    // write operation
+    write_seqlock(&info->block_locks[block_index]);
 
     memcpy(bh->b_data, data_block, sizeof(*data_block));
+    SET_BIT(info->free_blocks, block_index);
+
+    write_sequnlock(&info->block_locks[block_index]);
+
     mark_buffer_dirty(bh);
 #ifdef WB
     AUDIT { printk(KERN_INFO "%s: [put_data()] forcing synchronization on page cache\n", MODNAME); }
@@ -119,9 +114,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     // release resources
     brelse(bh);
-    write_sequnlock(&info->block_locks[block_index]);
-    __sync_fetch_and_sub(&info->count, 1);
     kfree(data_block);
+    __sync_fetch_and_sub(&info->count, 1);
 
     AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful - written %lu bytes in block %d\n",
                    MODNAME, size, block_index); }
@@ -130,14 +124,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     buff_fail:
         kfree(data_block);
-        write_sequnlock(&info->block_locks[block_index]);
-    block_fail:
-        CLEAR_BIT(info->free_blocks, block_index);
-        write_unlock(&info->fb_lock);
-    unavail_fail:
-    size_fail:
+    failure:
         __sync_fetch_and_sub(&info->count, 1);
-    dev_fail:
         return fail;
 }
 
