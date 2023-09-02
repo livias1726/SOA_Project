@@ -53,5 +53,21 @@ Since each inode can have only one data block:
 
 ## Seqlocks and Reader/Writer locks ##
 
-Seqlocks: 
+### Seqlocks ### 
+
 Readers never block a writer, but they must retry if a writer is in progress by detecting change in the sequence number.
+
+### Reader/Writer locks ###
+
+rwlock_t is a multiple readers and single writer lock mechanism.
+
+* Non-PREEMPT_RT kernels implement rwlock_t as a spinning lock and the suffix rules of spinlock_t apply accordingly. 
+The implementation is fair, thus preventing writer starvation.
+
+* PREEMPT_RT kernels map rwlock_t to a separate rt_mutex-based implementation, thus changing semantics:
+  * All the spinlock_t changes also apply to rwlock_t. 
+  * Because an rwlock_t writer cannot grant its priority to multiple readers, a preempted low-priority reader will 
+  continue holding its lock, thus starving even high-priority writers. In contrast, because readers can grant their 
+  priority to a writer, a preempted low-priority writer will have its priority boosted until it releases the lock, 
+  thus preventing that writer from starving readers.
+

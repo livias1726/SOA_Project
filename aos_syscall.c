@@ -216,17 +216,14 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     unsigned int seq;
 
     // check if device is mounted
-    if (!info->is_mounted) {
-        fail = -ENODEV;
-        goto dev_fail;
-    }
+    if (!info->is_mounted) return -ENODEV;
 
     __sync_fetch_and_add(&info->count, 1);
 
     // check legal operation
     if (offset < 2 || offset > info->sb.partition_size) {
         fail = -EINVAL;
-        goto param_fail;
+        goto failure;
     }
 
     do {
@@ -235,7 +232,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
             fail = -EIO;
-            goto param_fail;
+            goto failure;
         }
         data_block = (struct aos_data_block*)bh->b_data;
 
@@ -253,19 +250,21 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     // invalidate data
     write_seqlock(&info->block_locks[offset]);
     data_block->metadata.is_valid = 0; // todo: check if invalid bit is set correctly
+    write_sequnlock(&info->block_locks[offset]);
+
     mark_buffer_dirty(bh);
+    brelse(bh);
+    __sync_fetch_and_sub(&info->count, 1);
 
     AUDIT { printk(KERN_INFO "%s: [invalidate_data()] system call was successful - invalidated block %u\n",
                    MODNAME, offset); }
 
-    write_sequnlock(&info->block_locks[offset]);
-    fail = 0;
+    return 0;
 
     buffer_fail:
         brelse(bh);
-    param_fail:
+    failure:
         __sync_fetch_and_sub(&info->count, 1);
-    dev_fail:
         return fail;
 }
 
