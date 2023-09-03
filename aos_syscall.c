@@ -34,7 +34,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int fail, lim, block_index;
+    int nblocks, block_index;
     size_t ret;
 
     // check if device is mounted
@@ -49,10 +49,10 @@ asmlinkage int sys_put_data(char * source, size_t size){
     }
 
     // read bitmap
-    lim = BITS_TO_LONGS(info->sb.partition_size);
-    block_index = find_first_zero_bit(info->free_blocks, lim);
+    nblocks = info->sb.partition_size;
+    block_index = find_first_zero_bit(info->free_blocks, nblocks);
 
-    if(block_index == lim) { // no free block was found
+    if(block_index == nblocks) { // no free block was found
         __sync_fetch_and_sub(&info->count, 1);
         return -ENOMEM;
     }

@@ -23,7 +23,7 @@ aos_fs_info_t *info;
 static int init_fs_info(struct aos_super_block* aos_sb) {
 
     int nblocks = aos_sb->partition_size;
-    int ulongs = BITS_TO_LONGS(nblocks); //ROUND_UP(nblocks, 64);
+    int ulongs = BITS_TO_LONGS(nblocks);
     int lim;
     int i;
 
