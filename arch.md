@@ -71,3 +71,41 @@ The implementation is fair, thus preventing writer starvation.
   priority to a writer, a preempted low-priority writer will have its priority boosted until it releases the lock, 
   thus preventing that writer from starving readers.
 
+# System Calls #
+
+## Put data ##
+
+* Check device is mounted: if not, return ENODEV.
+* Atomically increase the presence counter on the device.
+* Check if the size is legal: if not, decrease the presence counter and return EINVAL.
+* Find the first free block in the map: if not found, decrease the presence counter and return ENOMEM.
+* Atomically set to 1 the free block bit in the map.
+* Allocate a data block to fill: if error, atomically clear the bit, decrease the presence counter and return ENOMEM.
+* Fill data block.
+* Retrieve buffer head for the specific block index: if error, free allocated memory, ..., and return EIO.
+* Get the block seqlock as a writer.
+* Copy the data block in the buffer head data.
+* Release the block seqlock.
+* Raise a new writing on buffer head to be written back in memory.
+* Release the resources (buffer head, data block, presence counter).
+* Return the used block index.
+
+## Get data ##
+
+* .
+
+## Invalidate data ##
+
+* Check device is mounted: if not, return ENODEV.
+* Atomically increase the presence counter on the device.
+* Check if the offset is legal: if not, decrease the presence counter and return EINVAL.
+* Try reading the given block: 
+  * Retrieve buffer head for the specific block index: if error, decrease the presence counter and return EIO.
+  * If the block is invalid, release the buffer head, decrease the presence counter and return ENODATA.
+* Atomically clear the relative bit in the map.
+* Get the block seqlock as a writer.
+* Copy the data block in the buffer head data.
+* Release the block seqlock.
+* Raise a new writing on buffer head to be written back in memory.
+* Release the resources (buffer head, data block, presence counter).
+* Return the used block index.

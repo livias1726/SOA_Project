@@ -34,8 +34,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    uint64_t *free_map;
-    int i, j, fail, lim, block_index = -1;
+    int fail, lim, block_index;
     size_t ret;
 
     // check if device is mounted
@@ -45,44 +44,27 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     // check legal size
     if (size+1 >= sizeof(struct aos_data_block)) {
-        fail = -EINVAL;
-        goto failure;
+        __sync_fetch_and_sub(&info->count, 1);
+        return -EINVAL;
     }
 
     // read bitmap
-    free_map = info->free_blocks;
-    lim = ROUND_UP(info->sb.partition_size, 64);
+    lim = BITS_TO_LONGS(info->sb.partition_size);
+    block_index = find_first_zero_bit(info->free_blocks, lim);
 
-    read_lock(&info->fb_lock);
-    // find a free block
-    for (i = 0; i < lim; ++i) { // scan 64 bit at a time
-
-        if ((free_map[i] & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) continue;
-
-        // found block with a bit unset
-        j = i * 64;
-        lim = j + 64;
-        for (; j < lim; ++j) {
-            if (!(TEST_BIT(free_map, j))) {
-                block_index = j;
-                break;
-            }
-        }
-        break;
+    if(block_index == lim) { // no free block was found
+        __sync_fetch_and_sub(&info->count, 1);
+        return -ENOMEM;
     }
-    read_unlock(&info->fb_lock);
 
-    // no free block was found
-    if(block_index == -1) {
-        fail = -ENOMEM;
-        goto failure;
-    }
+    set_bit(block_index, info->free_blocks);
 
     // alloc block area to retrieve message from user
     data_block = kmalloc(sizeof(struct aos_data_block), GFP_KERNEL);
     if (!data_block) {
-        fail = -ENOMEM;
-        goto failure;
+        clear_bit(block_index, info->free_blocks);
+        __sync_fetch_and_sub(&info->count, 1);
+        return -ENOMEM;
     }
 
     // retrieve message from user
@@ -94,16 +76,15 @@ asmlinkage int sys_put_data(char * source, size_t size){
     // get data block in page cache buffer
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
-        fail = -EIO;
-        goto buff_fail;
+        kfree(data_block);
+        clear_bit(block_index, info->free_blocks);
+        __sync_fetch_and_sub(&info->count, 1);
+        return -EIO;
     }
 
     // write operation
     write_seqlock(&info->block_locks[block_index]);
-
     memcpy(bh->b_data, data_block, sizeof(*data_block));
-    SET_BIT(info->free_blocks, block_index);
-
     write_sequnlock(&info->block_locks[block_index]);
 
     mark_buffer_dirty(bh);
@@ -121,12 +102,6 @@ asmlinkage int sys_put_data(char * source, size_t size){
                    MODNAME, size, block_index); }
 
     return block_index;
-
-    buff_fail:
-        kfree(data_block);
-    failure:
-        __sync_fetch_and_sub(&info->count, 1);
-        return fail;
 }
 
 /**
@@ -212,7 +187,6 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int fail;
     unsigned int seq;
 
     // check if device is mounted
@@ -222,8 +196,8 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     // check legal operation
     if (offset < 2 || offset > info->sb.partition_size) {
-        fail = -EINVAL;
-        goto failure;
+        __sync_fetch_and_sub(&info->count, 1);
+        return -EINVAL;
     }
 
     do {
@@ -231,25 +205,24 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         // get data block in page cache buffer
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
-            fail = -EIO;
-            goto failure;
+            __sync_fetch_and_sub(&info->count, 1);
+            return -EIO;
         }
         data_block = (struct aos_data_block*)bh->b_data;
 
         if (!data_block->metadata.is_valid) { // the block does not contain valid data
-            fail = -ENODATA;
-            goto buffer_fail;
+            brelse(bh);
+            __sync_fetch_and_sub(&info->count, 1);
+            return -ENODATA;
         }
     } while (read_seqretry(&info->block_locks[offset], seq));
 
     // set invalid block as free
-    write_lock(&info->fb_lock);
-    CLEAR_BIT(info->free_blocks, offset);
-    write_unlock(&info->fb_lock);
+    clear_bit(offset, info->free_blocks);
 
     // invalidate data
     write_seqlock(&info->block_locks[offset]);
-    data_block->metadata.is_valid = 0; // todo: check if invalid bit is set correctly
+    data_block->metadata.is_valid = 0;
     write_sequnlock(&info->block_locks[offset]);
 
     mark_buffer_dirty(bh);
@@ -260,12 +233,6 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
                    MODNAME, offset); }
 
     return 0;
-
-    buffer_fail:
-        brelse(bh);
-    failure:
-        __sync_fetch_and_sub(&info->count, 1);
-        return fail;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
