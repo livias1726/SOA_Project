@@ -1,6 +1,7 @@
 * TODO: write back policy at compile time
 * TODO: chronological reading when calling read() on the device (aos_read)
   * IDEA: using block's metadata to identify a chronological delivery order.
+* TODO: change usage of block_size parameter in super block!
 
 
 * CHECK: the valid bit is set correctly in INVALIDATE syscall

@@ -92,7 +92,15 @@ The implementation is fair, thus preventing writer starvation.
 
 ## Get data ##
 
-* .
+* Check device is mounted: if not, return ENODEV.
+* Atomically increase the presence counter on the device.
+* Check if the size and the offset are legal: if not, decrease the presence counter and return EINVAL.
+* Try reading the given block:
+  * Retrieve buffer head for the specific block index: if error, decrease the presence counter and return EIO.
+  * Copy block locally and release the buffer head.
+* If the block is invalid, decrease the presence counter and return ENODATA.
+* Copy the message from the block and retrieve its length compared to the size parameter.
+* Deliver the message to the user, decrease the presence counter and return the number of bytes read.
 
 ## Invalidate data ##
 

@@ -148,7 +148,6 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     sb->s_root->d_op = &aos_de_ops;
 
     info->is_mounted = 1;
-    //fs_info = *info;
 
     // unlock the inode to make it usable
     unlock_new_inode(root_inode);

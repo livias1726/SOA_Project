@@ -118,7 +118,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int loaded_bytes, len, fail;
+    int loaded_bytes, len;
     unsigned int seq;
     char * msg;
     size_t ret;
@@ -131,8 +131,8 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     // check parameters
     aos_sb = info->sb;
     if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.block_size) {
-        fail = -EINVAL;
-        goto failure;
+        __sync_fetch_and_sub(&info->count, 1);
+        return -EINVAL;
     }
 
     do {
@@ -140,8 +140,8 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
         // get data block in page cache buffer
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
-            fail = -EIO;
-            goto failure;
+            __sync_fetch_and_sub(&info->count, 1);
+            return -EIO;
         }
         memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
         brelse(bh);
@@ -149,15 +149,15 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     // check data validity
     if (!data_block.metadata.is_valid) {
-        fail = -ENODATA;
-        goto failure;
+        __sync_fetch_and_sub(&info->count, 1);
+        return -ENODATA;
     }
 
     msg = data_block.data.msg;
     len = strlen(msg);
     if (len == 0) { // no available data
-        fail = 0;
-        goto failure;
+        __sync_fetch_and_sub(&info->count, 1);
+        return 0;
     } else if (len < size) {
         size = len;
     }
@@ -166,14 +166,12 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
 
+    __sync_fetch_and_sub(&info->count, 1);
+
     AUDIT { printk(KERN_INFO "%s: [get_data()] system call was successful - read %d bytes in block %llu\n",
                    MODNAME, loaded_bytes, offset); }
 
-    fail = loaded_bytes;
-
-    failure:
-        __sync_fetch_and_sub(&info->count, 1);
-        return fail;
+    return loaded_bytes;
 }
 
 /**
