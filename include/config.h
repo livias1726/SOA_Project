@@ -5,6 +5,7 @@
 
 #define MODNAME "AOS"
 #define AUDIT if(1)
+#define WB if(0)
 
 MODULE_LICENSE("GPL");
 

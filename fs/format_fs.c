@@ -20,6 +20,7 @@ static int build_superblock(int fd, int nblocks){
     struct aos_super_block aos_sb = {
             .magic = MAGIC,
             .block_size = AOS_BLOCK_SIZE,
+            .data_block_size = sizeof(struct aos_data_block),
             .partition_size = nblocks+2,
     };
 

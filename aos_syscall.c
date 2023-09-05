@@ -34,24 +34,27 @@ asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int nblocks, block_index;
+    struct aos_super_block aos_sb;
+    int nblocks, block_index, avb_size;
     size_t ret;
 
     // check if device is mounted
     if (!info->is_mounted) return -ENODEV;
 
+    // signal device usage
     __sync_fetch_and_add(&info->count, 1);
 
-    // check legal size
-    if (size+1 >= sizeof(struct aos_data_block)) {
+    // check if the size is legal
+    aos_sb = info->sb;
+    avb_size = aos_sb.data_block_size;
+    if (size+1 >= avb_size) {
         __sync_fetch_and_sub(&info->count, 1);
         return -EINVAL;
     }
 
-    // read bitmap
-    nblocks = info->sb.partition_size;
+    // read bitmap to find an available block
+    nblocks = aos_sb.partition_size;
     block_index = find_first_zero_bit(info->free_blocks, nblocks);
-
     if(block_index == nblocks) { // no free block was found
         __sync_fetch_and_sub(&info->count, 1);
         return -ENOMEM;
@@ -60,7 +63,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     set_bit(block_index, info->free_blocks);
 
     // alloc block area to retrieve message from user
-    data_block = kmalloc(sizeof(struct aos_data_block), GFP_KERNEL);
+    data_block = kmalloc(avb_size, GFP_KERNEL);
     if (!data_block) {
         clear_bit(block_index, info->free_blocks);
         __sync_fetch_and_sub(&info->count, 1);
@@ -88,10 +91,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
     write_sequnlock(&info->block_locks[block_index]);
 
     mark_buffer_dirty(bh);
-#ifdef WB
-    AUDIT { printk(KERN_INFO "%s: [put_data()] forcing synchronization on page cache\n", MODNAME); }
-    sync_dirty_buffer(bh); // immediate synchronous write on the device
-#endif
+    WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
+    //AUDIT { printk(KERN_INFO "%s: [put_data()] forced synchronization on page cache\n", MODNAME); }
 
     // release resources
     brelse(bh);
@@ -130,7 +131,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     // check parameters
     aos_sb = info->sb;
-    if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.block_size) {
+    if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.data_block_size) {
         __sync_fetch_and_sub(&info->count, 1);
         return -EINVAL;
     }

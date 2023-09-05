@@ -17,13 +17,6 @@
 #define FILENAME_MAXLEN 255
 #define ROOT_INODE_NUMBER 10
 #define FILE_INODE_NUMBER 1
-#define FULL_MAP_ENTRY 0xffffffffffffffff
-
-#define SET_BIT(map,k) map[(k)/64] |= (1ULL << ((k)%64))
-#define CLEAR_BIT(map,k) map[(k)/64] &= ~(1ULL << ((k)%64))
-#define TEST_BIT(map,k) (map[(k)/64] >> ((k)%64)) & 1ULL
-
-#define ROUND_UP(a,b) (a+b-1)/b
 
 #define DEVICE_NAME "the-device"
 #define MODNAME "AOS"
@@ -33,10 +26,11 @@
 struct aos_super_block {
     uint64_t magic;             /* Magic number to identify the file system */
     uint64_t block_size;        /* Block size in bytes */
+    uint64_t data_block_size;        /* Block size in bytes */
     uint64_t partition_size;    /* Number of blocks in the file system */
 
     // padding to fit into a single (first) block
-    char padding[AOS_BLOCK_SIZE - (3 * sizeof(uint64_t))];
+    char padding[AOS_BLOCK_SIZE - (4 * sizeof(uint64_t))];
 };
 
 /* inode definition */
