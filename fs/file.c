@@ -62,13 +62,12 @@ int aos_release(struct inode *inode, struct file *filp){
  * todo The content must be delivered chronologically and the operation should only return data related to messages
  *  not invalidated before the access in read mode to the corresponding block of the device in an I/O session.
  * */
-// noteme: test reading non chronologically
 ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int i, len, ret, nblocks;
+    int i, len, ret, nblocks, data_block_size;
     unsigned int seq;
     char *msg, *block_msg;
     loff_t offset;
@@ -76,24 +75,28 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     // check if device is mounted
     if (!info->is_mounted) return -ENODEV;
 
-    printk(KERN_INFO "%s: read operation called by thread %d", MODNAME, current->pid);
+    printk(KERN_INFO "%s: read operation called by thread %d\n", MODNAME, current->pid);
 
     aos_sb = info->sb;
     nblocks = aos_sb.partition_size;
+    data_block_size = aos_sb.data_block_size;
 
     msg = kzalloc(count, GFP_KERNEL);
+    if(!msg) return -ENOMEM;
+
     offset = 0;
     for (i = 2; i < nblocks; ++i) {
+
+        // read data block into local variable
         do {
             seq = read_seqbegin(&info->block_locks[i]);
             // get data block in page cache buffer
             bh = sb_bread(info->vfs_sb, i);
             if(!bh) {
-                __sync_fetch_and_sub(&info->count, 1);
                 kfree(msg);
                 return -EIO;
             }
-            memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
+            memcpy(&data_block, bh->b_data, data_block_size);
             brelse(bh);
         } while (read_seqretry(&info->block_locks[i], seq));
 
@@ -105,7 +108,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         len = strlen(block_msg);
         if (len == 0) continue;
 
-        printk(KERN_INFO "%s: read operation must access block %d of the device", MODNAME, i);
+        AUDIT { printk(KERN_INFO "%s: read operation must access block %d of the device\n", MODNAME, i); }
 
         if ((offset + len) > count) { // last block to read
             len = count - offset;
@@ -122,13 +125,11 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         }
     }
 
-    if(offset > 0){
-        ret = copy_to_user(buf, msg, offset);
-    } else {
-        ret = 0;
-    }
-
+    ret = (offset > 0) ? copy_to_user(buf, msg, offset) : 0;
     kfree(msg);
+
+    AUDIT { printk(KERN_INFO "%s: read operation by thread %d completed\n", MODNAME, current->pid); }
+
     return (offset - ret);
 }
 

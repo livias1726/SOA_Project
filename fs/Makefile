@@ -1,4 +1,4 @@
-NBLOCKS := 10
+NBLOCKS := 100
 
 ifeq ($(KERNELRELEASE),)
 

@@ -115,7 +115,6 @@ __SYSCALL_DEFINEx(3, _get_data, uint64_t, offset, char *, destination, size_t, s
 #else
 asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 #endif
-
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
@@ -126,7 +125,6 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     // check if device is mounted
     if (!info->is_mounted) return -ENODEV;
-
     __sync_fetch_and_add(&info->count, 1);
 
     // check parameters
