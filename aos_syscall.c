@@ -149,12 +149,10 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     } while (read_seqretry(&info->block_locks[offset], seq));
 
     // check data validity
-    /*
     if (!data_block.metadata.is_valid) {
         __sync_fetch_and_sub(&info->count, 1);
         return -ENODATA;
     }
-     */
 
     msg = data_block.data.msg;
     len = strlen(msg);
