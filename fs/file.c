@@ -84,9 +84,9 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     msg = kzalloc(count, GFP_KERNEL);
     if(!msg) return -ENOMEM;
 
+    i = 2;
     offset = 0;
-    for (i = 2; i < nblocks; ++i) {
-
+    for_each_set_bit_from(i, info->free_blocks, nblocks){
         // read data block into local variable
         do {
             seq = read_seqbegin(&info->block_locks[i]);
@@ -100,7 +100,6 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
             brelse(bh);
         } while (read_seqretry(&info->block_locks[i], seq));
 
-        // check data validity
         if (!data_block.metadata.is_valid) continue;
 
         // check data availability

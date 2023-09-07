@@ -6,3 +6,6 @@
             operations and can trigger a retry if an invalidation is done before.
   * TEST: avoid using the valid metadata.
     * -> maybe impossible.
+* TEST: GET: if validity is checked from bitmap before reading, it will be preserved the starting order of writings
+            meaning that if an invalidation is performed while reading, this will not invalidate the get operation.
+            This does not happen when the validity is checked from metadata after the reading.
