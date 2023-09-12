@@ -60,12 +60,13 @@ asmlinkage int sys_put_data(char * source, size_t size){
         return -ENOMEM;
     }
 
-    set_bit(block_index, info->free_blocks);
+    // ATOMICALLY set the bit of the free block
+    //set_bit(block_index, info->free_blocks);
 
     // alloc block area to retrieve message from user
     data_block = kmalloc(avb_size, GFP_KERNEL);
     if (!data_block) {
-        clear_bit(block_index, info->free_blocks);
+        //clear_bit(block_index, info->free_blocks);
         __sync_fetch_and_sub(&info->count, 1);
         return -ENOMEM;
     }
@@ -80,7 +81,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
         kfree(data_block);
-        clear_bit(block_index, info->free_blocks);
+        //clear_bit(block_index, info->free_blocks);
         __sync_fetch_and_sub(&info->count, 1);
         return -EIO;
     }
@@ -90,9 +91,10 @@ asmlinkage int sys_put_data(char * source, size_t size){
     memcpy(bh->b_data, data_block, sizeof(*data_block));
     write_sequnlock(&info->block_locks[block_index]);
 
+    set_bit(block_index, info->free_blocks);
+
     mark_buffer_dirty(bh);
     WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
-    //AUDIT { printk(KERN_INFO "%s: [put_data()] forced synchronization on page cache\n", MODNAME); }
 
     // release resources
     brelse(bh);
@@ -185,6 +187,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
+    int old;
     unsigned int seq;
 
     // check if device is mounted
@@ -198,6 +201,12 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         return -EINVAL;
     }
 
+// VERSION 1:
+// the invalidator tries to read a block until no concurrent write is detected
+// if the block does not contain valid data, return
+// clear the bit of the specific block in the free map
+
+    /*
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
         // get data block in page cache buffer
@@ -207,17 +216,36 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
             return -EIO;
         }
         data_block = (struct aos_data_block*)bh->b_data;
-
-        if (!data_block->metadata.is_valid) { // the block does not contain valid data
-            brelse(bh);
-            __sync_fetch_and_sub(&info->count, 1);
-            return -ENODATA;
-        }
     } while (read_seqretry(&info->block_locks[offset], seq));
+
+    if (!data_block->metadata.is_valid) { // the block does not contain valid data
+        brelse(bh);
+        __sync_fetch_and_sub(&info->count, 1);
+        return -ENODATA;
+    }
 
     // set invalid block as free
     clear_bit(offset, info->free_blocks);
+     */
 
+// VERSION2:
+// ATOMICALLY clear the specific bit in the free map and retrieve its old value to return if data is already invalid
+// Get the buffer head to change block metadata
+    old = test_and_clear_bit(offset, info->free_blocks);
+    if (!old) { // the block does not contain valid data
+        __sync_fetch_and_sub(&info->count, 1);
+        return -ENODATA;
+    }
+
+    bh = sb_bread(info->vfs_sb, offset);
+    if(!bh) {
+        set_bit(offset, info->free_blocks);
+        __sync_fetch_and_sub(&info->count, 1);
+        return -EIO;
+    }
+    data_block = (struct aos_data_block*)bh->b_data;
+
+// both versions
     // invalidate data
     write_seqlock(&info->block_locks[offset]);
     data_block->metadata.is_valid = 0;

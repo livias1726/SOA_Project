@@ -14,6 +14,7 @@
     }
 
 int main(){
+
     int fd, ret;
     char *buf;
 
@@ -29,9 +30,14 @@ int main(){
         perror("Malloc failed.");
         exit(EXIT_FAILURE);
     }
-    ret = read(fd, buf, DEVICE_SIZE);
+    ret = read(fd, buf, 400);
     CHECK(ret)
     printf("\t%d bytes read. Device content is: %s\n", ret, buf);
+
+    ret = read(fd, buf, 400);
+    CHECK(ret)
+    printf("\t%d bytes read. Device content is: %s\n", ret, buf);
+
     free(buf);
 
     printf("3. Closing the device: ");

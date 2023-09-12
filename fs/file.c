@@ -70,12 +70,12 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     int i, len, ret, nblocks, data_block_size;
     unsigned int seq;
     char *msg, *block_msg;
-    loff_t offset;
+    loff_t b_idx = *f_pos >> 32, offset = *f_pos & 0x00000000ffffffff;
 
     // check if device is mounted
     if (!info->is_mounted) return -ENODEV;
 
-    printk(KERN_INFO "%s: read operation called by thread %d\n", MODNAME, current->pid);
+    printk(KERN_INFO "%s: read operation called by thread %d - fp at %lld\n", MODNAME, current->pid, *f_pos);
 
     aos_sb = info->sb;
     nblocks = aos_sb.partition_size;
@@ -84,8 +84,11 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     msg = kzalloc(count, GFP_KERNEL);
     if(!msg) return -ENOMEM;
 
-    i = 2;
-    offset = 0;
+    // retrieve last block accessed by the current thread
+    b_idx = *f_pos >> 32;
+    i = (b_idx < 2) ? b_idx : b_idx + 2;
+
+    offset = *f_pos & 0x00000000ffffffff; //offset = 0;
     for_each_set_bit_from(i, info->free_blocks, nblocks){
         // read data block into local variable
         do {
@@ -107,7 +110,9 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         len = strlen(block_msg);
         if (len == 0) continue;
 
-        AUDIT { printk(KERN_INFO "%s: read operation must access block %d of the device\n", MODNAME, i); }
+        AUDIT { printk(KERN_DEBUG "%s: read operation must access block %d of the device\n", MODNAME, i); }
+
+        // set hi-32 bit of f_pos to the current index i
 
         if ((offset + len) > count) { // last block to read
             len = count - offset;
@@ -124,10 +129,11 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         }
     }
 
+    *f_pos = offset;
     ret = (offset > 0) ? copy_to_user(buf, msg, offset) : 0;
     kfree(msg);
 
-    AUDIT { printk(KERN_INFO "%s: read operation by thread %d completed\n", MODNAME, current->pid); }
+    AUDIT { printk(KERN_DEBUG "%s: read operation by thread %d completed\n", MODNAME, current->pid); }
 
     return (offset - ret);
 }

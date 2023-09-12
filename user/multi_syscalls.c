@@ -49,6 +49,27 @@ void* test_invalidate_data(void *arg){
     }
 }
 
+void only_writers(){
+    int i, j;
+    pthread_t tids[2][THREADS_PER_CALL];
+    int ids_p[THREADS_PER_CALL];
+    int ids_i[THREADS_PER_CALL];
+
+    for (i = 0; i < THREADS_PER_CALL; ++i) {
+        ids_p[i] = i;
+        ids_i[i] = i+THREADS_PER_CALL;
+
+        pthread_create(&tids[0][i], NULL, test_put_data, (void *)(ids_p+i));
+        pthread_create(&tids[1][i], NULL, test_invalidate_data, (void *)(ids_i+i));
+    }
+
+    for (i = 0; i < THREADS_PER_CALL; ++i) {
+        for (j = 0; j < 2; ++j) {
+            pthread_join(tids[j][i], NULL);
+        }
+    }
+}
+
 void non_sequential(){
     int i, j, z = THREADS_PER_CALL*2;
     pthread_t tids[NUM_SYSCALLS][THREADS_PER_CALL];
@@ -153,6 +174,7 @@ int main(int argc, char *argv[]){
            "\t[4] Sequential calls: n x put, n x get, n x invalidate\n"
            "\t[5] Sequential put: n x put, n x (get, invalidate)\n"
            "\t[6] Non-sequential: n x (put, get, invalidate)\n"
+           "\t[7] Only writers: n x (put, invalidate)\n"
            "\t[other] Exit\n");
 
     pthread_barrier_init(&barrier, NULL, NUM_SYSCALLS*THREADS_PER_CALL);
@@ -175,6 +197,9 @@ int main(int argc, char *argv[]){
             break;
         case 6:
             non_sequential();
+            break;
+        case 7:
+            only_writers();
             break;
         default:
             break;
