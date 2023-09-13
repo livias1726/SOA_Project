@@ -38,13 +38,13 @@ asmlinkage int sys_put_data(char * source, size_t size){
     int nblocks, block_index, avb_size;
     size_t ret;
 
-    // check if device is mounted
+    /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
 
-    // signal device usage
+    /* Signal device usage */
     __sync_fetch_and_add(&info->count, 1);
 
-    // check if the size is legal
+    /* Check input parameter */
     aos_sb = info->sb;
     avb_size = aos_sb.data_block_size;
     if (size+1 >= avb_size) {
@@ -54,19 +54,20 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     // read bitmap to find an available block
     nblocks = aos_sb.partition_size;
-    block_index = find_first_zero_bit(info->free_blocks, nblocks);
-    if(block_index == nblocks) { // no free block was found
-        __sync_fetch_and_sub(&info->count, 1);
-        return -ENOMEM;
-    }
-
-    // ATOMICALLY set the bit of the free block
-    //set_bit(block_index, info->free_blocks);
+    do { // warning: this loop could freeze the kernel if the kernel thread goes into busy waiting and its not preemptable
+        block_index = find_first_zero_bit(info->free_blocks, nblocks);
+        if(block_index == nblocks) { // no free block was found
+            __sync_fetch_and_sub(&info->count, 1);
+            return -ENOMEM;
+        }
+    /* ATOMICALLY test and set the bit of the free block: if a concurrent PUT retrieved the same block index, only
+     * the first one to set the bit will be able to use it. The other one will try to find a new free block */
+    } while (test_and_set_bit(block_index, info->free_blocks));
 
     // alloc block area to retrieve message from user
-    data_block = kmalloc(avb_size, GFP_KERNEL);
+    data_block = kmalloc(aos_sb.block_size, GFP_KERNEL);
     if (!data_block) {
-        //clear_bit(block_index, info->free_blocks);
+        clear_bit(block_index, info->free_blocks);
         __sync_fetch_and_sub(&info->count, 1);
         return -ENOMEM;
     }
@@ -81,7 +82,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
         kfree(data_block);
-        //clear_bit(block_index, info->free_blocks);
+        clear_bit(block_index, info->free_blocks);
         __sync_fetch_and_sub(&info->count, 1);
         return -EIO;
     }
@@ -91,6 +92,10 @@ asmlinkage int sys_put_data(char * source, size_t size){
     memcpy(bh->b_data, data_block, sizeof(*data_block));
     write_sequnlock(&info->block_locks[block_index]);
 
+    /* ATOMICALLY re-set the bit of the free block in case an invalidate was executed in the meantime
+     * this is needed when the invalidate operation only looks for set bits in the free map,
+     * without checking the valid metadata: this speeds up the invalidate operation but can interfere with
+     * concurrent put operations */
     set_bit(block_index, info->free_blocks);
 
     mark_buffer_dirty(bh);
@@ -120,51 +125,56 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int loaded_bytes, len;
+    int loaded_bytes, len, fail;
     unsigned int seq;
     char * msg;
     size_t ret;
 
-    // check if device is mounted
+    /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
+
+    /* Signal device usage */
     __sync_fetch_and_add(&info->count, 1);
 
-    // check parameters
+    /* Check input parameters */
     aos_sb = info->sb;
     if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.data_block_size) {
-        __sync_fetch_and_sub(&info->count, 1);
-        return -EINVAL;
+        fail = -EINVAL;
+        goto failure;
     }
 
-    // read block
+    /* Read given block */
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
-        // get data block in page cache buffer
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
-            __sync_fetch_and_sub(&info->count, 1);
-            return -EIO;
+            fail = -EIO;
+            goto failure;
         }
-        memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
+        // copy the data in another memory location to release the buffer head
+        memcpy(&data_block, bh->b_data, aos_sb.block_size);
         brelse(bh);
     } while (read_seqretry(&info->block_locks[offset], seq));
 
-    // check data validity
+    /* Check data validity: test with bit operations on free map is not atomic. This implementation ensure that
+     * data block remains the same after a read was successful according to the seqlock */
     if (!data_block.metadata.is_valid) {
-        __sync_fetch_and_sub(&info->count, 1);
-        return -ENODATA;
+        fail = -ENODATA;
+        goto failure;
     }
 
     msg = data_block.data.msg;
+
+    /* Check message length */
     len = strlen(msg);
     if (len == 0) { // no available data
-        __sync_fetch_and_sub(&info->count, 1);
-        return 0;
+        fail = 0;
+        goto failure;
     } else if (len < size) {
         size = len;
     }
 
-    // try to read 'size' bytes of data starting from 'offset' into 'destination'
+    /* Try to read 'size' bytes of data starting from 'offset' into 'destination' */
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
 
@@ -174,6 +184,11 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
                    MODNAME, loaded_bytes, offset); }
 
     return loaded_bytes;
+
+    failure:
+        AUDIT { printk(KERN_INFO "%s: [get_data()] system call failed with error %d\n", MODNAME, fail); }
+        __sync_fetch_and_sub(&info->count, 1);
+        return fail;
 }
 
 /**
@@ -187,26 +202,26 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int old;
     unsigned int seq;
+    int fail;
 
-    // check if device is mounted
+    /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
 
+    /* Signal device usage */
     __sync_fetch_and_add(&info->count, 1);
 
-    // check legal operation
+    /* Check input parameters */
     if (offset < 2 || offset > info->sb.partition_size) {
-        __sync_fetch_and_sub(&info->count, 1);
-        return -EINVAL;
+        fail = -EINVAL;
+        goto failure;
     }
 
-// VERSION 1:
+/* VERSION 1:
 // the invalidator tries to read a block until no concurrent write is detected
 // if the block does not contain valid data, return
 // clear the bit of the specific block in the free map
 
-    /*
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
         // get data block in page cache buffer
@@ -226,27 +241,28 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     // set invalid block as free
     clear_bit(offset, info->free_blocks);
-     */
 
-// VERSION2:
-// ATOMICALLY clear the specific bit in the free map and retrieve its old value to return if data is already invalid
-// Get the buffer head to change block metadata
-    old = test_and_clear_bit(offset, info->free_blocks);
-    if (!old) { // the block does not contain valid data
-        __sync_fetch_and_sub(&info->count, 1);
-        return -ENODATA;
+// -------------- VERSION 1 */
+
+/* VERSION2:
+ * ATOMICALLY clear the specific bit in the free map and retrieve its old value to return if data is already invalid
+ * Get the buffer head to change block metadata */
+    if (!test_and_clear_bit(offset, info->free_blocks)) {
+        fail = -ENODATA;
+        goto failure;
     }
 
+    /* Get buffer head to execute the writing */
     bh = sb_bread(info->vfs_sb, offset);
     if(!bh) {
         set_bit(offset, info->free_blocks);
-        __sync_fetch_and_sub(&info->count, 1);
-        return -EIO;
+        fail = -EIO;
+        goto failure;
     }
     data_block = (struct aos_data_block*)bh->b_data;
+// -------------- VERSION 2
 
-// both versions
-    // invalidate data
+    /* Change the block's 'valid' metadata */
     write_seqlock(&info->block_locks[offset]);
     data_block->metadata.is_valid = 0;
     write_sequnlock(&info->block_locks[offset]);
@@ -257,8 +273,12 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     AUDIT { printk(KERN_INFO "%s: [invalidate_data()] system call was successful - invalidated block %u\n",
                    MODNAME, offset); }
-
     return 0;
+
+    failure:
+        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] system call failed with %d error\n", MODNAME, fail); }
+        __sync_fetch_and_sub(&info->count, 1);
+        return fail;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
