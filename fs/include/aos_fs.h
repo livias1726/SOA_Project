@@ -26,7 +26,7 @@
 struct aos_super_block {
     uint64_t magic;             /* Magic number to identify the file system */
     uint64_t block_size;        /* Block size in bytes */
-    uint64_t data_block_size;        /* Block size in bytes */
+    uint64_t data_block_size;   /* Block size in bytes */
     uint64_t partition_size;    /* Number of blocks in the file system */
 
     // padding to fit into a single (first) block
