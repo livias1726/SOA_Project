@@ -70,6 +70,8 @@ typedef struct aos_fs_info {
     struct aos_super_block sb;  /* AOS super block structure */
     uint8_t is_mounted;         /* Change this atomically */
     uint64_t count;             /* Number of thread currently operating on the device */
+    atomic64_t last_put;
+    atomic64_t first_block;
     ulong *free_blocks;         /* Pointer to a bitmap to represent the state of each data block */
     seqlock_t *block_locks;
 } aos_fs_info_t;

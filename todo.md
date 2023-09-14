@@ -16,4 +16,6 @@
     è già invalidato:
   * SOLUZIONI: 
     * effettuare set_bit in PUT solo alla fine -> possibili conflitti tra più PUT (da testare)
+
+* TEST: se is_valid non viene utilizzato nella GET, diventa inutile!!!
     

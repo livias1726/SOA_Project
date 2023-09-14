@@ -40,6 +40,8 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     for (i = nblocks; i < lim; ++i) { // limits access by put to the unavailable blocks
         __set_bit(i, info->free_blocks);
     }
+    info->last_put.counter = 1;
+    info->first_block.counter = 2;
 
     // init every seqlock associated to each block
     info->block_locks = kzalloc(nblocks * sizeof(seqlock_t), GFP_KERNEL);

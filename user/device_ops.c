@@ -35,9 +35,10 @@ int main(){
     }
 
     printf("2. Reading the device: ");
-    ret = read(fd, buf, 400);
+    ret = read(fd, buf, DEVICE_SIZE);
     CHECK(ret)
     printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
+    /*
     memset(buf, 0, 400);
 
     ret = read(fd, buf, 400);
@@ -54,7 +55,7 @@ int main(){
     ret = read(fd, buf, 400);
     CHECK(ret)
     printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
-
+*/
     free(buf);
 
     printf("3. Closing the device: ");
