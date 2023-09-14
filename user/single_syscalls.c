@@ -20,6 +20,10 @@ void test_put_data(){
         case 3:
             size = sizes[--idx];
             msg = malloc(size);
+            if (!msg) {
+                printf("malloc failed\n");
+                exit(EXIT_FAILURE);
+            }
             memcpy(msg, msgs[idx], size);
             memcpy(msg + size, "\0", 1);
             break;
