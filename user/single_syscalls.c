@@ -18,16 +18,16 @@ void test_put_data(){
         case 1:
         case 2:
         case 3:
-            idx--;
-            msg = malloc(sizes[idx]);
-            memcpy(msg, msgs[idx], sizes[idx]);
+            size = sizes[--idx];
+            msg = malloc(size);
+            memcpy(msg, msgs[idx], size);
+            memcpy(msg + size, "\0", 1);
             break;
         default:
             printf("Insert a message: ");
             scanf("%s", msg); // fixme: segfault
+            size = strlen(msg);
     }
-
-    size = strlen(msg);
 
     printf("Test parameters:\n\tsource = \"%s\"\n\tsize = %d\n", msg, size);
     ret = syscall(put, msg, size);

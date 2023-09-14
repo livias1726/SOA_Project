@@ -23,14 +23,11 @@ extern aos_fs_info_t *info;
  * */
 int aos_open(struct inode *inode, struct file *filp){
 
-    // check if the FS is mounted
-    if (!info->is_mounted) {
-        printk(KERN_WARNING "%s: [aos_open()] operation failed - fs not mounted.\n", MODNAME);
-        return -ENODEV;
-    }
+    /* Check if device is mounted */
+    if (!info->is_mounted) return -ENODEV;
 
-    // atomic add to usage counter
-    __sync_fetch_and_add(&(info->count),1);
+    /* Signal device usage */
+    __sync_fetch_and_add(&info->count, 1);
 
     printk(KERN_INFO "%s: device file successfully opened by thread %d\n", MODNAME, current->pid);
 
@@ -42,15 +39,11 @@ int aos_open(struct inode *inode, struct file *filp){
  * */
 int aos_release(struct inode *inode, struct file *filp){
 
-    // check if the FS is mounted
-    if (!info->is_mounted) {
-        printk(KERN_WARNING "%s: [aos_release()] operation failed - fs not mounted.\n", MODNAME);
-        return -ENODEV;
-    }
+    filp->f_pos = 0;
+    // todo: invalidate further usage of device descriptor
 
     // atomic sub to usage counter
     __sync_fetch_and_sub(&(info->count),1);
-
     printk(KERN_INFO "%s: device file closed by thread %d\n",MODNAME, current->pid);
 
     return 0;
@@ -67,75 +60,93 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int i, len, ret, nblocks, data_block_size;
+    int len, ret, nblocks, data_block_size, bytes_read;
     unsigned int seq;
     char *msg, *block_msg;
-    loff_t b_idx = *f_pos >> 32, offset = *f_pos & 0x00000000ffffffff;
+    loff_t b_idx, offset;
 
-    // check if device is mounted
-    if (!info->is_mounted) return -ENODEV;
+    /* Check parameter validity */
+    if (!count) return 0;
+    if (!buf) return -EINVAL;
 
-    printk(KERN_INFO "%s: read operation called by thread %d - fp at %lld\n", MODNAME, current->pid, *f_pos);
+    /* Allocate memory */
+    msg = kzalloc(count, GFP_KERNEL);
+    if(!msg) return -ENOMEM;
 
+    /* Retrieve device info */
     aos_sb = info->sb;
     nblocks = aos_sb.partition_size;
     data_block_size = aos_sb.data_block_size;
 
-    msg = kzalloc(count, GFP_KERNEL);
-    if(!msg) return -ENOMEM;
+    /* Parse file pointer */
+    b_idx = (*f_pos >> 32) % nblocks;   // retrieve last block accessed by the current thread (high 32 bits)
+    if (!b_idx) b_idx = 2;
+    offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread in the block (low 32 bits)
 
-    // retrieve last block accessed by the current thread
-    b_idx = *f_pos >> 32;
-    i = (b_idx < 2) ? b_idx : b_idx + 2;
+    printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
+           MODNAME, current->pid, b_idx, offset);
 
-    offset = *f_pos & 0x00000000ffffffff; //offset = 0;
-    for_each_set_bit_from(i, info->free_blocks, nblocks){
-        // read data block into local variable
+    bytes_read = 0;
+    for_each_set_bit_from(b_idx, info->free_blocks, nblocks){
+        /* Read data block into a local variable */
         do {
-            seq = read_seqbegin(&info->block_locks[i]);
-            // get data block in page cache buffer
-            bh = sb_bread(info->vfs_sb, i);
+            seq = read_seqbegin(&info->block_locks[b_idx]);
+            bh = sb_bread(info->vfs_sb, b_idx);
             if(!bh) {
                 kfree(msg);
                 return -EIO;
             }
             memcpy(&data_block, bh->b_data, data_block_size);
             brelse(bh);
-        } while (read_seqretry(&info->block_locks[i], seq));
+        } while (read_seqretry(&info->block_locks[b_idx], seq));
 
+        /* Check data validity: invalidation could happen while reading the block.
+         * This ensures that a writing on the block is always detected, even if the read is already executing. */
         if (!data_block.metadata.is_valid) continue;
 
-        // check data availability
-        block_msg = data_block.data.msg;
+        /* Use the file pointer offset to start reading from given position in the file */
+        if (offset) {
+            block_msg = (data_block.data.msg) + offset; // shift the message according to the file pointer
+        } else {
+            block_msg = (data_block.data.msg); // if offset is zero, read the whole message
+        }
+
         len = strlen(block_msg);
-        if (len == 0) continue;
 
-        AUDIT { printk(KERN_DEBUG "%s: read operation must access block %d of the device\n", MODNAME, i); }
+        /* Check data availability */
+        if (len == 0) {
+            offset = 0; // reset intra-block offset
+            continue;
+        }
 
-        // set hi-32 bit of f_pos to the current index i
+        AUDIT { printk(KERN_DEBUG "%s: read operation accessed block %lld of the device\n", MODNAME, b_idx); }
 
-        if ((offset + len) > count) { // last block to read
-            len = count - offset;
+        if ((bytes_read + len) > count) { // last block to read
+            len = count - bytes_read;
             if (len > 0) {
-                memcpy(msg + offset, block_msg, len);
+                memcpy(msg + bytes_read, block_msg, len);
+                bytes_read += len;
                 offset += len;
             }
             break;
         } else {
-            memcpy(msg + offset, block_msg, len);
-            offset += len;
-            memcpy(msg + offset, "\n", 1);
-            offset += 1;
+            memcpy(msg + bytes_read, block_msg, len);
+            bytes_read += len;
+            memcpy(msg + bytes_read, "\n", 1);
+            bytes_read += 1;
+
+            offset = 0;
         }
     }
 
-    *f_pos = offset;
-    ret = (offset > 0) ? copy_to_user(buf, msg, offset) : 0;
+    // set high 32 bits of f_pos to the current index i and low 32 bits of f_pos to the new offset count
+    *f_pos = (b_idx << 32) | offset;
+    ret = (bytes_read > 0) ? copy_to_user(buf, msg, bytes_read) : 0;
     kfree(msg);
 
-    AUDIT { printk(KERN_DEBUG "%s: read operation by thread %d completed\n", MODNAME, current->pid); }
+    AUDIT { printk(KERN_INFO "%s: read operation by thread %d completed\n", MODNAME, current->pid); }
 
-    return (offset - ret);
+    return (bytes_read - ret);
 }
 
 /*
