@@ -276,8 +276,17 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     /* Update the index of first block to read chronologically */
     if(atomic64_read(&info->first_block) == offset) {
-        first = (offset+1) % nblocks;
-        if(!first) first = 2;
+        first = find_next_bit(info->free_blocks, nblocks, offset);
+        if(first == nblocks) { // no set bit after this
+            if (offset != 2) {
+                first = find_next_bit(info->free_blocks, offset, 2); // try for the previous bits
+                if (first == offset) {
+                    first = 2;
+                }
+            } else {
+                first = 2;
+            }
+        }
         atomic64_set(&info->first_block, first);
     }
 
