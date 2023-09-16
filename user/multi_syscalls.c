@@ -38,8 +38,10 @@ void* test_get_data(void *arg) {
 
 void* test_invalidate_data(void *arg){
     int ret, tid = *(int*)arg;
+    srand(tid);
 
-    ret = syscall(inv, (tid%NBLOCKS)+2);
+    //ret = syscall(inv, (tid%NBLOCKS)+2);
+    ret = syscall(inv, (rand()%NBLOCKS)+2);
     if(ret < 0) {
         check_error(tid);
         pthread_exit((void*)-1);

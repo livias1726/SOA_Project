@@ -106,8 +106,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     kfree(data_block);
     __sync_fetch_and_sub(&info->count, 1);
 
-    AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful - written %lu bytes in block %d\n",
-                   MODNAME, size, block_index); }
+    AUDIT { printk(KERN_INFO "%s: [put_data()] successful - written %lu bytes in block %d\n", MODNAME, size, block_index); }
 
     return block_index;
 
@@ -115,6 +114,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
         clear_bit(block_index, info->free_blocks);
     failure:
         __sync_fetch_and_sub(&info->count, 1);
+
+        AUDIT { printk(KERN_INFO "%s: [put_data()] failed on error %d\n", MODNAME, fail); }
+
         return fail;
 }
 
@@ -186,19 +188,19 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     __sync_fetch_and_sub(&info->count, 1);
 
-    AUDIT { printk(KERN_INFO "%s: [get_data()] system call was successful - read %d bytes in block %llu\n",
+    AUDIT { printk(KERN_INFO "%s: [get_data()] successful - read %d bytes in block %llu\n",
                    MODNAME, loaded_bytes, offset); }
 
     return loaded_bytes;
 
     failure:
-        AUDIT { printk(KERN_INFO "%s: [get_data()] system call failed with error %d\n", MODNAME, fail); }
+        AUDIT { printk(KERN_INFO "%s: [get_data()] on block %llu failed with error %d\n", MODNAME, offset, fail); }
         __sync_fetch_and_sub(&info->count, 1);
         return fail;
 }
 
 /**
- * Invalidate data in a block at a given offset. Data should logically disappear from the device
+ * Invalidate data in a block at a given offset. Data should logically disappear from the device.
  * @return ENODATA error if no data is currently valid and associated with the offset parameter
  * */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
@@ -224,52 +226,28 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         goto failure;
     }
 
-/* VERSION 1:
-// the invalidator tries to read a block until no concurrent write is detected
-// if the block does not contain valid data, return
-// clear the bit of the specific block in the free map
-
+    /* Read a block until no concurrent write is detected */
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
-        // get data block in page cache buffer
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
-            __sync_fetch_and_sub(&info->count, 1);
-            return -EIO;
+            fail = -EIO;
+            goto failure;
         }
         data_block = (struct aos_data_block*)bh->b_data;
     } while (read_seqretry(&info->block_locks[offset], seq));
 
-    if (!data_block->metadata.is_valid) { // the block does not contain valid data
+    /* Check the presence of valid data in the block */
+    if (!data_block->metadata.is_valid) {
         brelse(bh);
-        __sync_fetch_and_sub(&info->count, 1);
-        return -ENODATA;
-    }
-
-    // set invalid block as free
-    clear_bit(offset, info->free_blocks);
-
-// -------------- VERSION 1 */
-
-/* VERSION2:
- * ATOMICALLY clear the specific bit in the free map and retrieve its old value to return if data is already invalid
- * Get the buffer head to change block metadata */
-    if (!test_and_clear_bit(offset, info->free_blocks)) {
         fail = -ENODATA;
         goto failure;
     }
 
-    /* Get buffer head to execute the writing */
-    bh = sb_bread(info->vfs_sb, offset);
-    if(!bh) {
-        set_bit(offset, info->free_blocks);
-        fail = -EIO;
-        goto failure;
-    }
-    data_block = (struct aos_data_block*)bh->b_data;
-// -------------- VERSION 2
+    /* Set invalid block as free to write on */
+    clear_bit(offset, info->free_blocks);
 
-    /* Change the block's 'valid' metadata */
+    /* Change the block's metadata */
     write_seqlock(&info->block_locks[offset]);
     data_block->metadata.is_valid = 0;
     write_sequnlock(&info->block_locks[offset]);
@@ -282,24 +260,26 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
                 first = find_next_bit(info->free_blocks, offset, 2); // try for the previous bits
                 if (first == offset) {
                     first = 2;
+                    atomic64_set(&info->last_put, 1);
                 }
             } else {
                 first = 2;
+                atomic64_set(&info->last_put, 1);
             }
         }
         atomic64_set(&info->first_block, first);
+        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] on block %d set first = %d.\n", MODNAME, offset, first); }
     }
 
     mark_buffer_dirty(bh);
     brelse(bh);
     __sync_fetch_and_sub(&info->count, 1);
 
-    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] system call was successful - invalidated block %u\n",
-                   MODNAME, offset); }
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] successful - invalidated block %d\n", MODNAME, offset); }
     return 0;
 
     failure:
-        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] system call failed with %d error\n", MODNAME, fail); }
+        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] on block %d failed with error %d.\n", MODNAME, offset, fail); }
         __sync_fetch_and_sub(&info->count, 1);
         return fail;
 }
