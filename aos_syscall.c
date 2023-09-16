@@ -35,7 +35,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     struct buffer_head *bh;
     struct aos_data_block *data_block;
     struct aos_super_block aos_sb;
-    int nblocks, block_index, avb_size, fail, from;
+    int nblocks, block_index, avb_size, fail;
     size_t ret;
 
     /* Check if device is mounted */
@@ -55,8 +55,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     /* Read bitmap to find a free block */
     nblocks = aos_sb.partition_size;
     do {
-        from = (info->last_put.counter == nblocks-1) ? 2 : info->last_put.counter;
-        block_index = find_next_zero_bit(info->free_blocks, nblocks, from);
+        block_index = find_first_zero_bit(info->free_blocks, nblocks);
         if(block_index == nblocks) { // no free block was found
             fail = -ENOMEM;
             goto failure;
@@ -94,9 +93,6 @@ asmlinkage int sys_put_data(char * source, size_t size){
      * without checking the valid metadata: this speeds up the invalidate operation but can interfere with
      * concurrent put operations */
     set_bit(block_index, info->free_blocks);
-
-    /* Atomically sets the value of last_put to block_index */
-    atomic64_set(&info->last_put, block_index);
 
     mark_buffer_dirty(bh);
     WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
@@ -211,7 +207,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     struct buffer_head *bh;
     struct aos_data_block *data_block;
     unsigned int seq;
-    int fail, nblocks, first;
+    int fail, nblocks;
 
     /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
@@ -251,25 +247,6 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     write_seqlock(&info->block_locks[offset]);
     data_block->metadata.is_valid = 0;
     write_sequnlock(&info->block_locks[offset]);
-
-    /* Update the index of first block to read chronologically */
-    if(atomic64_read(&info->first_block) == offset) {
-        first = find_next_bit(info->free_blocks, nblocks, offset);
-        if(first == nblocks) { // no set bit after this
-            if (offset != 2) {
-                first = find_next_bit(info->free_blocks, offset, 2); // try for the previous bits
-                if (first == offset) {
-                    first = 2;
-                    atomic64_set(&info->last_put, 1);
-                }
-            } else {
-                first = 2;
-                atomic64_set(&info->last_put, 1);
-            }
-        }
-        atomic64_set(&info->first_block, first);
-        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] on block %d set first = %d.\n", MODNAME, offset, first); }
-    }
 
     mark_buffer_dirty(bh);
     brelse(bh);

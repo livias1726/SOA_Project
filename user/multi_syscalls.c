@@ -38,7 +38,6 @@ void* test_get_data(void *arg) {
 
 void* test_invalidate_data(void *arg){
     int ret, tid = *(int*)arg;
-    srand(tid);
 
     //ret = syscall(inv, (tid%NBLOCKS)+2);
     ret = syscall(inv, (rand()%NBLOCKS)+2);
@@ -180,6 +179,8 @@ int main(int argc, char *argv[]){
            "\t[other] Exit\n");
 
     pthread_barrier_init(&barrier, NULL, NUM_SYSCALLS*THREADS_PER_CALL);
+
+    srand(time(NULL));
 
     switch(getint()){
         case 1:

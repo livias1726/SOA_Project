@@ -80,7 +80,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 
     /* Parse file pointer */
     b_idx = (*f_pos >> 32) % nblocks;   // retrieve last block accessed by the current thread (high 32 bits)
-    if (!b_idx) b_idx = atomic64_read(&info->first_block);
+    if (!b_idx) b_idx = 2;
     offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread in the block (low 32 bits)
 
     printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
