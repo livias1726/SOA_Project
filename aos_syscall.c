@@ -35,6 +35,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     struct buffer_head *bh;
     struct aos_data_block *data_block;
     struct aos_super_block aos_sb;
+    struct timespec64 curr_time;
     int nblocks, block_index, avb_size, fail;
     size_t ret;
 
@@ -78,14 +79,17 @@ asmlinkage int sys_put_data(char * source, size_t size){
     data_block->metadata.is_valid = 1;
 
     /* Write block on device */
+    write_seqlock(&info->block_locks[block_index]);
     bh = sb_bread(info->vfs_sb, block_index);
     if(!bh) {
         kfree(data_block);
         fail = -EIO;
         goto failure_2;
     }
-    write_seqlock(&info->block_locks[block_index]);
     memcpy(bh->b_data, data_block, sizeof(*data_block));
+    mark_buffer_dirty(bh);
+    WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
+    brelse(bh);
     write_sequnlock(&info->block_locks[block_index]);
 
     /* ATOMICALLY re-set the bit of the free block in case an invalidate was executed in the meantime
@@ -94,15 +98,14 @@ asmlinkage int sys_put_data(char * source, size_t size){
      * concurrent put operations */
     set_bit(block_index, info->free_blocks);
 
-    mark_buffer_dirty(bh);
-    WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
+    ktime_get_real_ts64(&curr_time);
 
     /* Release resources */
-    brelse(bh);
     kfree(data_block);
     __sync_fetch_and_sub(&info->count, 1);
 
-    AUDIT { printk(KERN_INFO "%s: [put_data()] successful - written %lu bytes in block %d\n", MODNAME, size, block_index); }
+    AUDIT { printk(KERN_INFO "%s: [put_data()] successful - written %lu bytes in block %d [%lld, %ld]\n",
+                   MODNAME, size, block_index, curr_time.tv_sec, curr_time.tv_nsec); }
 
     return block_index;
 
@@ -205,8 +208,7 @@ __SYSCALL_DEFINEx(1, _invalidate_data, uint32_t, offset){
 asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
-    struct aos_data_block *data_block;
-    unsigned int seq;
+    struct timespec64 curr_time;
     int fail, nblocks;
 
     /* Check if device is mounted */
@@ -222,42 +224,37 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         goto failure;
     }
 
-    /* Read a block until no concurrent write is detected */
-    do {
-        seq = read_seqbegin(&info->block_locks[offset]);
-        bh = sb_bread(info->vfs_sb, offset);
-        if(!bh) {
-            fail = -EIO;
-            goto failure;
-        }
-        data_block = (struct aos_data_block*)bh->b_data;
-    } while (read_seqretry(&info->block_locks[offset], seq));
-
-    /* Check the presence of valid data in the block */
-    if (!data_block->metadata.is_valid) {
-        brelse(bh);
+/* VERSION2:
+ * ATOMICALLY clear the specific bit in the free map and retrieve its old value to return if data is already invalid
+ * Get the buffer head to change block metadata */
+    if (!test_and_clear_bit(offset, info->free_blocks)) {
         fail = -ENODATA;
         goto failure;
     }
 
-    /* Set invalid block as free to write on */
-    clear_bit(offset, info->free_blocks);
+    ktime_get_real_ts64(&curr_time);
 
     /* Change the block's metadata */
     write_seqlock(&info->block_locks[offset]);
-    data_block->metadata.is_valid = 0;
-    write_sequnlock(&info->block_locks[offset]);
-
+    bh = sb_bread(info->vfs_sb, offset);
+    if(!bh) {
+        set_bit(offset, info->free_blocks);
+        fail = -EIO;
+        goto failure;
+    }
+    ((struct aos_data_block*)bh->b_data)->metadata.is_valid = 0;
     mark_buffer_dirty(bh);
     brelse(bh);
-    __sync_fetch_and_sub(&info->count, 1);
+    write_sequnlock(&info->block_locks[offset]);
 
-    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] successful - invalidated block %d\n", MODNAME, offset); }
+    __sync_fetch_and_sub(&info->count, 1);
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] successful - invalidated block %d [%lld, %ld]\n",
+                   MODNAME, offset, curr_time.tv_sec, curr_time.tv_nsec); }
     return 0;
 
     failure:
-        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] on block %d failed with error %d.\n", MODNAME, offset, fail); }
         __sync_fetch_and_sub(&info->count, 1);
+        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] on block %d failed with error %d.\n", MODNAME, offset, fail); }
         return fail;
 }
 
