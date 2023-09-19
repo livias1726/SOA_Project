@@ -9,7 +9,7 @@
 
 #include "include/config.h"
 #include "include/aos_fs.h"
-#include "utils/utils.h"
+#include "include/utils.h"
 
 unsigned long the_syscall_table = 0x0;
 module_param(the_syscall_table, ulong, 0660);

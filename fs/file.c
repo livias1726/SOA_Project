@@ -60,7 +60,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int len, ret, nblocks, data_block_size, bytes_read;
+    int len, ret, nblocks, data_block_size, bytes_read, blocks_read;
     unsigned int seq;
     char *msg, *block_msg;
     loff_t b_idx, offset;
@@ -87,7 +87,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
            MODNAME, current->pid, b_idx, offset);
 
     bytes_read = 0;
-
+    blocks_read = 1;
     do {
         /* Read data block into a local variable */
         do {
@@ -107,6 +107,8 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
             b_idx = data_block.metadata.next;
             continue;
         }
+
+        blocks_read++;
 
         /* Use the file pointer offset to start reading from given position in the file */
         if (offset) {
@@ -143,7 +145,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         }
 
         b_idx = data_block.metadata.next;
-    } while(bytes_read < count);
+    } while((bytes_read < count) && (b_idx != 0) && (blocks_read < nblocks));
 
     // set high 32 bits of f_pos to the current index i and low 32 bits of f_pos to the new offset count
     *f_pos = (b_idx << 32) | offset;
