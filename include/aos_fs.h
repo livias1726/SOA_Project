@@ -2,12 +2,12 @@
 #define SOA_PROJECT_AOS_FS_H
 
 #ifdef __KERNEL__
-#include <linux/fs.h>
-#include <linux/types.h>
-#include <linux/spinlock.h>
-#include <linux/seqlock.h>
-#include <linux/slab.h>
-#include <linux/bitmap.h>
+#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/fs.h"
+#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/types.h"
+#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/spinlock.h"
+#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/seqlock.h"
+#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/slab.h"
+#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/bitmap.h"
 #endif
 
 #define MAGIC 0x42424242
@@ -51,7 +51,10 @@ struct aos_dir_record {
 
 /* Data block definition */
 struct aos_db_metadata{
-    uint8_t is_valid;
+    uint64_t is_valid;
+    uint64_t prev;
+    uint64_t next;
+    uint64_t counter;
 };
 
 struct aos_db_userdata{
@@ -70,7 +73,11 @@ typedef struct aos_fs_info {
     struct aos_super_block sb;  /* AOS super block structure */
     uint8_t is_mounted;         /* Change this atomically */
     uint64_t count;             /* Number of thread currently operating on the device */
+    uint64_t first;             /* First valid block written chronologically */
+    uint64_t last;              /* Last valid block written chronologically */
     ulong *free_blocks;         /* Pointer to a bitmap to represent the state of each data block */
+    ulong *put_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
+    ulong *inv_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
     seqlock_t *block_locks;
 } aos_fs_info_t;
 #endif

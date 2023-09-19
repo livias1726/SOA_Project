@@ -6,7 +6,7 @@
 #include <linux/types.h>
 #include <linux/string.h>
 
-#include "include/aos_fs.h"
+#include "../include/aos_fs.h"
 
 /**
  * The device driver should support file system operations allowing the access to the currently saved data:
@@ -60,7 +60,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int len, ret, nblocks, data_block_size, bytes_read, lim, first, exit;
+    int len, ret, nblocks, data_block_size, bytes_read;
     unsigned int seq;
     char *msg, *block_msg;
     loff_t b_idx, offset;
@@ -80,77 +80,70 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 
     /* Parse file pointer */
     b_idx = (*f_pos >> 32) % nblocks;   // retrieve last block accessed by the current thread (high 32 bits)
-    if (!b_idx) b_idx = 2;
+    if (!b_idx) b_idx = info->first; // todo: maybe need to be atomic
     offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread in the block (low 32 bits)
 
     printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
            MODNAME, current->pid, b_idx, offset);
 
     bytes_read = 0;
-    first = b_idx;
-    lim = nblocks;
-    exit = 0;
 
-    read_loop:
-        for_each_set_bit_from(b_idx, info->free_blocks, lim){
-            /* Read data block into a local variable */
-            do {
-                seq = read_seqbegin(&info->block_locks[b_idx]);
-                bh = sb_bread(info->vfs_sb, b_idx);
-                if(!bh) {
-                    kfree(msg);
-                    return -EIO;
-                }
-                memcpy(&data_block, bh->b_data, data_block_size);
-                brelse(bh);
-            } while (read_seqretry(&info->block_locks[b_idx], seq));
-
-            /* Check data validity: invalidation could happen while reading the block.
-             * This ensures that a writing on the block is always detected, even if the read is already executing. */
-            if (!data_block.metadata.is_valid) continue;
-
-            /* Use the file pointer offset to start reading from given position in the file */
-            if (offset) {
-                block_msg = (data_block.data.msg) + offset; // shift the message according to the file pointer
-            } else {
-                block_msg = (data_block.data.msg); // if offset is zero, read the whole message
+    do {
+        /* Read data block into a local variable */
+        do {
+            seq = read_seqbegin(&info->block_locks[b_idx]);
+            bh = sb_bread(info->vfs_sb, b_idx);
+            if(!bh) {
+                kfree(msg);
+                return -EIO;
             }
+            memcpy(&data_block, bh->b_data, data_block_size);
+            brelse(bh);
+        } while (read_seqretry(&info->block_locks[b_idx], seq));
 
-            len = strlen(block_msg);
-
-            /* Check data availability */
-            if (len == 0) {
-                offset = 0; // reset intra-block offset
-                continue;
-            }
-
-            AUDIT { printk(KERN_DEBUG "%s: read operation accessed block %lld of the device\n", MODNAME, b_idx); }
-
-            if ((bytes_read + len) > count) { // last block to read
-                len = count - bytes_read;
-                if (len > 0) {
-                    memcpy(msg + bytes_read, block_msg, len);
-                    bytes_read += len;
-                    offset += len;
-                }
-                exit = 1;
-            } else {
-                memcpy(msg + bytes_read, block_msg, len);
-                bytes_read += len;
-                memcpy(msg + bytes_read, "\n", 1);
-                bytes_read += 1;
-
-                offset = 0;
-            }
+        /* Check data validity: invalidation could happen while reading the block.
+         * This ensures that a writing on the block is always detected, even if the read is already executing. */
+        if (!data_block.metadata.is_valid) {
+            b_idx = data_block.metadata.next;
+            continue;
         }
 
-    /* If the read started from a block that is not the first on the device (2) read the remaining bits */
-    if (!exit && first > 2) {
-        b_idx = 2;
-        lim = first;
-        first = 2;
-        goto read_loop;
-    }
+        /* Use the file pointer offset to start reading from given position in the file */
+        if (offset) {
+            block_msg = (data_block.data.msg) + offset; // shift the message according to the file pointer
+        } else {
+            block_msg = (data_block.data.msg); // if offset is zero, read the whole message
+        }
+
+        len = strlen(block_msg);
+
+        /* Check data availability */
+        if (len == 0) {
+            offset = 0; // reset intra-block offset
+            b_idx = data_block.metadata.next;
+            continue;
+        }
+
+        AUDIT { printk(KERN_DEBUG "%s: read operation accessed block %lld of the device\n", MODNAME, b_idx); }
+
+        if ((bytes_read + len) > count) { // last block to read
+            len = count - bytes_read;
+            if (len > 0) {
+                memcpy(msg + bytes_read, block_msg, len);
+                bytes_read += len;
+                offset += len;
+            }
+        } else {
+            memcpy(msg + bytes_read, block_msg, len);
+            bytes_read += len;
+            memcpy(msg + bytes_read, "\n", 1);
+            bytes_read += 1;
+
+            offset = 0;
+        }
+
+        b_idx = data_block.metadata.next;
+    } while(bytes_read < count);
 
     // set high 32 bits of f_pos to the current index i and low 32 bits of f_pos to the new offset count
     *f_pos = (b_idx << 32) | offset;

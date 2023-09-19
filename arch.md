@@ -79,7 +79,9 @@ The implementation is fair, thus preventing writer starvation.
 * Atomically increase the presence counter on the device.
 * Check if the size is legal: if not, decrease the presence counter and return EINVAL.
 * Find the first free block in the map: if not found, decrease the presence counter and return ENOMEM.
-* Atomically set to 1 the free block bit in the map.
+  * Atomically set to 1 the free block bit in the map: this is done in a loop of test_and_set, where if a concurrent PUT
+    has selected the same free block, only one of them will be able to keep it (the first that set the bit).
+    * Ensures that no PUT will operate on the same block concurrently.
 * Allocate a data block to fill: if error, atomically clear the bit, decrease the presence counter and return ENOMEM.
 * Fill data block.
 * Retrieve buffer head for the specific block index: if error, free allocated memory, ..., and return EIO.

@@ -8,7 +8,8 @@
 #include "lib/include/scth.h"
 
 #include "include/config.h"
-#include "fs/include/aos_fs.h"
+#include "include/aos_fs.h"
+#include "utils/utils.h"
 
 unsigned long the_syscall_table = 0x0;
 module_param(the_syscall_table, ulong, 0660);
@@ -32,12 +33,8 @@ __SYSCALL_DEFINEx(2, _put_data, char *, source, size_t, size){
 #else
 asmlinkage int sys_put_data(char * source, size_t size){
 #endif
-    struct buffer_head *bh;
-    struct aos_data_block *data_block;
     struct aos_super_block aos_sb;
-    struct timespec64 curr_time;
-    int nblocks, block_index, avb_size, fail;
-    size_t ret;
+    int nblocks, block_index, avb_size, fail, old_last, old_first;
 
     /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
@@ -65,57 +62,63 @@ asmlinkage int sys_put_data(char * source, size_t size){
      * the first one to set the bit will be able to use it. The other one will try to find a new free block */
     } while (test_and_set_bit(block_index, info->free_blocks));
 
-    /* Allocate block */
-    data_block = kmalloc(aos_sb.block_size, GFP_KERNEL);
-    if (!data_block) {
-        fail = -ENOMEM;
-        goto failure_2;
+    /* Signal a pending PUT on selected block.
+     * This cannot cause conflicts with other PUT operations thanks to the above loop. */
+    set_bit(block_index, info->put_map);
+
+    /* Wait for the completion of an eventual INVALIDATION on 'last':
+     * that's the only conflict that can happen between INV and PUT. */
+    wait_on_bit(info->inv_map, info->last, TASK_INTERRUPTIBLE);
+
+    /* checkme: set a timeout for the wait and a fixed number of trials on test???
+invalidation_wait:
+    if (test_bit(info->last, info->inv_map)) {
+        wait_on_bit(info->inv_map, info->last, TASK_INTERRUPTIBLE);
+        goto invalidation_wait;
+    }
+    */
+
+    /* ATOMICALLY update the last block to be written via 'last' variable.
+     * The order in which this operation is performed is what will order concurrent PUT: the first to update
+     * this value will be the first to write a new block chronologically (change metadata in the previous block['last'])
+     * and update new block metadata accordingly.
+     * */
+    old_last = __sync_val_compare_and_swap(&info->last, info->last, block_index); //checkme: nicer way to do this??
+
+    /* If the block is the first to be written (old_last is 1), then there's no need to update the preceding one
+     * to point to the new block. Else, the 'old_last' block must be updated to point to the new one in 'next' metadata
+     * */
+    if (old_last == 1) {
+        old_first = __sync_val_compare_and_swap(&info->first, info->first, block_index);
+    } else {
+        /* Writes on the 'next' metadata of the previous block (old_last).
+         * Cannot cause conflicts betwren PUT operations thanks to the atomic operations.
+         * checkme Cannot cause conflicts between PUT and INV... */
+        fail = change_next_block(old_last, block_index);
+        if (fail < 0) goto failure_2;
     }
 
-    /* Retrieve message from user */
-    ret = copy_from_user(data_block->data.msg, source, size);
-    size -= ret;
-    data_block->data.msg[size+1] = '\0';
-    data_block->metadata.is_valid = 1;
+    fail = put_new_block(block_index, source, size, old_last);
+    if (fail < 0) goto failure_3;
 
-    /* Write block on device */
-    write_seqlock(&info->block_locks[block_index]);
-    bh = sb_bread(info->vfs_sb, block_index);
-    if(!bh) {
-        kfree(data_block);
-        fail = -EIO;
-        goto failure_2;
-    }
-    memcpy(bh->b_data, data_block, sizeof(*data_block));
-    mark_buffer_dirty(bh);
-    WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
-    brelse(bh);
-    write_sequnlock(&info->block_locks[block_index]);
-
-    /* ATOMICALLY re-set the bit of the free block in case an invalidate was executed in the meantime
-     * this is needed when the invalidate operation only looks for set bits in the free map,
-     * without checking the valid metadata: this speeds up the invalidate operation but can interfere with
-     * concurrent put operations */
-    set_bit(block_index, info->free_blocks);
-
-    ktime_get_real_ts64(&curr_time);
+    /* Signal completion of PUT operation on given block */
+    clear_bit(block_index, info->put_map);
 
     /* Release resources */
-    kfree(data_block);
     __sync_fetch_and_sub(&info->count, 1);
-
-    AUDIT { printk(KERN_INFO "%s: [put_data()] successful - written %lu bytes in block %d [%lld, %ld]\n",
-                   MODNAME, size, block_index, curr_time.tv_sec, curr_time.tv_nsec); }
-
+    AUDIT { printk(KERN_INFO "%s: [put_data()] successful - written %d bytes in block %d\n",
+                   MODNAME, fail, block_index); }
     return block_index;
 
+    failure_3:
+        __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first' if it was changed
     failure_2:
+        __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' if no thread has changed it yet
         clear_bit(block_index, info->free_blocks);
+        clear_bit(block_index, info->put_map);
     failure:
         __sync_fetch_and_sub(&info->count, 1);
-
         AUDIT { printk(KERN_INFO "%s: [put_data()] failed on error %d\n", MODNAME, fail); }
-
         return fail;
 }
 
@@ -207,9 +210,11 @@ __SYSCALL_DEFINEx(1, _invalidate_data, uint32_t, offset){
 #else
 asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
-    struct buffer_head *bh;
-    struct timespec64 curr_time;
-    int fail, nblocks;
+    struct buffer_head *bh, *bh_prev, *bh_next;
+    struct aos_data_block *data_block;
+    unsigned int seq;
+    int fail, nblocks, prev, next;
+    bool first, last;
 
     /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
@@ -224,32 +229,69 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         goto failure;
     }
 
-/* VERSION2:
- * ATOMICALLY clear the specific bit in the free map and retrieve its old value to return if data is already invalid
- * Get the buffer head to change block metadata */
-    if (!test_and_clear_bit(offset, info->free_blocks)) {
+    /* Check current pending PUT on the same block */
+    if (test_bit(offset, info->put_map)) {
         fail = -ENODATA;
         goto failure;
     }
 
-    ktime_get_real_ts64(&curr_time);
+    /* Read a block until no concurrent write is detected */
+    do {
+        seq = read_seqbegin(&info->block_locks[offset]);
+        bh = sb_bread(info->vfs_sb, offset);
+        if(!bh) {
+            fail = -EIO;
+            goto failure;
+        }
+        data_block = (struct aos_data_block*)bh->b_data;
+    } while (read_seqretry(&info->block_locks[offset], seq));
+
+    /* Check the presence of valid data in the block */
+    if (!data_block->metadata.is_valid) {
+        brelse(bh);
+        fail = -ENODATA;
+        goto failure;
+    }
 
     /* Change the block's metadata */
     write_seqlock(&info->block_locks[offset]);
-    bh = sb_bread(info->vfs_sb, offset);
-    if(!bh) {
-        set_bit(offset, info->free_blocks);
+    data_block->metadata.is_valid = 0;
+    prev = data_block->metadata.prev;
+    next = data_block->metadata.next;
+
+    write_seqlock(&info->block_locks[prev]);
+    bh_prev = sb_bread(info->vfs_sb, prev);
+    if(!bh_prev) {
         fail = -EIO;
         goto failure;
     }
-    ((struct aos_data_block*)bh->b_data)->metadata.is_valid = 0;
+    ((struct aos_data_block*)bh->b_data)->metadata.next = next;
+    mark_buffer_dirty(bh_prev);
+    brelse(bh_prev);
+    write_sequnlock(&info->block_locks[prev]);
+
+    write_seqlock(&info->block_locks[next]);
+    bh_next = sb_bread(info->vfs_sb, next);
+    if(!bh_next) {
+        fail = -EIO;
+        goto failure;
+    }
+    ((struct aos_data_block*)bh->b_data)->metadata.prev = prev;
+    mark_buffer_dirty(bh_next);
+    brelse(bh_next);
+    write_sequnlock(&info->block_locks[next]);
+
     mark_buffer_dirty(bh);
     brelse(bh);
     write_sequnlock(&info->block_locks[offset]);
 
+
+
+    /* Set invalid block as free to write on */
+    clear_bit(offset, info->free_blocks);
+
     __sync_fetch_and_sub(&info->count, 1);
-    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] successful - invalidated block %d [%lld, %ld]\n",
-                   MODNAME, offset, curr_time.tv_sec, curr_time.tv_nsec); }
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] successful - invalidated block %d\n", MODNAME, offset); }
     return 0;
 
     failure:

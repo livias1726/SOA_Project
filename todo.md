@@ -4,54 +4,50 @@
     * If validity is checked from bitmap before reading, it will be preserved the starting order of writings
     meaning that if an invalidation is performed while reading, this will not invalidate the get operation.
     This does not happen when the validity is checked from metadata after the reading.
-  
-* TEST: what happens if a thread dies before closing the device (without subtracting the presence counter)
-
-* PROBLEMA: in un contesto multi-thread, è possibile che la prima scrittura non venga eseguita sul blocco 2, 
-    rendendo inutile la gestione di 'first' in invalidate.
-* PROBLEMA: in PUT concorrenti viene saltato il blocco 5
-* PROBLEMA: se INV invalida un indice (es: 3), ma non l'indice precedente (es: 2) e, successivamente, PUT scrive
-    in ogni blocco fino a tornare a scrivere nel primo indice invalidato (3), la READ andrà a leggere 3 come successivo 
-    a 2, quando, in realtà, andrebbe letto per ultimo.
-
-* TEST: bitmap ops before or after block ops
-
 
 # TEST ALGORITMI DI LETTURA
-1) Lista collegata di structs {int idx, *next} su cui PUT effettua l'append ad ogni nuova scrittura e INV effettua la 
-    remove ad ogni invalidazione
-   - PUT inserisce sempre alla fine 
-     - Conflitti con altre PUT: necessario sequenzializzare gli accessi alla lista 
-     - Conflitti con INV se questo opera sull'ultimo nodo della lista allo stesso tempo della PUT 
-   - INV deve scansionare la lista per rimuovere il nodo con IDX = OFFSET
-     - Collo di bottiglia con NBLOCKS molto grande.
-     - Conflitti con altre INV se operano su blocchi adiacenti in lista.
-     - Conflitti con PUT se opera sull'ultimo blocco.
-   - Possibile utilizzare i seqlock associati al blocco modificato per operare sul nodo in lista? Non risolve i conflitti 
-     su nodi adiacenti, a meno che non vengano presi i seqlock anche per quelli. 
-   - La lettura diventa banale se non si tocca la lista durante le operazioni. Altrimenti, serve RCU per i lettori.
 
+Using metadata: ogni blocco ha nei metadati l'indice del proprio successore e precedente.
 
-2) Using metadata: ogni blocco ha nei metadati l'indice del proprio successore e precedente
-   - Ogni PUT modifica 2 blocchi, 2 variabili e la bitmap: 
-     - il blocco nuovo (msg, is_valid, prev) 
-     - il suo predecessore, che corrisponde a 'last' (next)
-     - la variabile first (SE E SOLO SE 'last' = 1) da settare al nuovo blocco
-     - la variabile last da settare al nuovo blocco
-     - il bit relativo al nuovo blocco (set)
-       - Ottimizzazioni:
-          - Se il nuovo blocco è il primo inserito ('last' = 1) allora non serve modificare nessun altro blocco 
-          - Se il blocco da invalidare è 'last' allora non serve modificare nessun altro blocco (la lettura verifica
-            sempre anche bitmap o validity bit)
-   - Ogni INV modifica 3 blocchi, 2 variabili e la bitmap: 
-     - il blocco da invalidare (is_valid = 0) -> ricava predecessore e successore
-     - il suo predecessore (next = successore) 
-     - il suo successore (prev = predecessore)
-     - la variabile last (SE E SOLO SE è uguale al blocco da invalidare), per settarla al predecesore
-     - la variabile first (SE E SOLO SE è uguale al blocco da invalidare), per settarla al successore
-     - il bit relativo al blocco invalidato (clear)
-       - Ottimizzazioni:
-         - Se il blocco da invalidare è 'first' allora non serve modificare nessun altro blocco (??)
-         - Se il blocco da invalidare è 'last' allora non serve modificare nessun altro blocco (la lettura verifica 
-         sempre anche bitmap o validity bit)
-         - Se il blocco da invalidare è sia first che last, allora last si imposta a 1.
+## PUT 
+1. Check device and params.
+2. Test_and_Set the first free block. If no free blocks, return. -> No PUT on the same block.
+3. Set PUT usage on blk_idx. If last is used by INV, then wait -> No INV conflicts 
+4. CAS on last and retrieve old_last. -> No conflicts on last for concurrent PUT.
+5. Write new block (msg, is_valid, prev).
+6. If old_val = 1, then change first = blk_idx.
+7. Else, write preceding block (next).
+8. Clear PUT usage on blk_idx.
+
+## INV
+1. Check device and params.
+2. Test_and_Set INV usage on blk_idx -> if found set, then another INV on the same block is already pending. -> No INV on the same block.
+3. If blk_idx is used by PUT, return. If blk_idx.prev is used by PUT, wait -> No PUT conflict.
+4. Test_and_clear blk_idx on free block. If already cleared, return -> No INV on the same block. (REDUNDANT)
+5. If blk_idx.prev and blk_idx.next are used by INV, wait -> No conflicts on concurrent INV.
+6. Invalidate new block (is_valid).
+7. If blk_idx = first AND blk_idx = last, CAS on last = 1 and return. 
+8. If blk_idx = first, CAS on first = blk_idx.next and return.
+9. If blk_idx = last, CAS on last = blk_idx.prev and return.
+10. Write preceding block (next = blk_idx.next) and successive block (prev = blk_idx.prev)
+11. Clear blk_idx bit in INV_MASK.
+
+### Conflicts
+* PUT-PUT -> put always appends!
+  * On same block: test_and_set loop.
+  * On different blocks: CAS on last -> writings on the same block will touch different metadata (order doesn't matter) 
+* PUT-INV -> INV on the same block or on 'last'
+  * On same block: PUT sets bit in put_mask -> INV is rejected (trying to invalidate a message not yet created)
+  * **On different blocks: ???**
+* INV-PUT: 
+  * se INV sta operando su last, PUT deve attendere che abbia finito così da prelevare il nuovo valore di last 
+* INV-INV: 
+  * ordinate con test_and_clear per lo stesso blocco. INV concorrenti non possono operare sul blocco precedente e 
+          successivo a quello in invalidazione. Devono attendere la fine della precedente.
+
+### Write Seqlocks handling
+* When more than 1 thread writes on the same block but on different metadata, writers can operate concurrently.
+* To get the write_lock on the block and release it, it can be used a counter variable: 
+  * If the variable was 0 before increasing its value, take the write_lock.
+  * If the variable becomes 0 after decreasing its value, release the write_lock.
+* Writers that can be concurrent won't block each other.

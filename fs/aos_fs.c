@@ -5,7 +5,7 @@
 #include <linux/buffer_head.h>
 #include <linux/slab.h>
 
-#include "include/aos_fs.h"
+#include "../include/aos_fs.h"
 
 /**
  * The device should be mounted on whichever directory of the file system to enable the operations by threads.
@@ -27,11 +27,23 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     int lim;
     int i;
 
-    // build free blocks bitmap as an array of uint64_t
+    /* Allocate bitmaps */
     info->free_blocks = kzalloc(longs * sizeof(long), GFP_KERNEL);
     if (!info->free_blocks) {
         printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
-        return -ENOMEM;
+        goto fail_1;
+    }
+
+    info->put_map = kzalloc(longs * sizeof(long), GFP_KERNEL);
+    if (!info->put_map) {
+        printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
+        goto fail_2;
+    }
+
+    info->inv_map = kzalloc(longs * sizeof(long), GFP_KERNEL);
+    if (!info->inv_map) {
+        printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
+        goto fail_3;
     }
 
     __set_bit(0, info->free_blocks);
@@ -40,13 +52,13 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     for (i = nblocks; i < lim; ++i) { // limits access by put to the unavailable blocks
         __set_bit(i, info->free_blocks);
     }
+    info->last = 1;
 
     // init every seqlock associated to each block
     info->block_locks = kzalloc(nblocks * sizeof(seqlock_t), GFP_KERNEL);
     if (!info->block_locks) {
         printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate seqlocks\n", MODNAME);
-        kfree(info->free_blocks);
-        return -ENOMEM;
+        goto fail_4;
     }
 
     for (i = 0; i < nblocks; ++i) {
@@ -56,6 +68,15 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     info->vfs_sb->s_fs_info = info;
 
     return 0;
+
+    fail_4:
+        kfree(info->inv_map);
+    fail_3:
+        kfree(info->put_map);
+    fail_2:
+        kfree(info->free_blocks);
+    fail_1:
+        return -ENOMEM;
 }
 
 /*

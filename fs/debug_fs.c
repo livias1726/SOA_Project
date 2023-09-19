@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "include/aos_fs.h"
+#include "../include/aos_fs.h"
 
 int print_superblock(int fd, int *d_blocks){
     ssize_t ret;

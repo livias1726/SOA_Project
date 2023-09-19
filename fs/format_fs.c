@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "include/aos_fs.h"
+#include "../include/aos_fs.h"
 
 /*
  * This user-level software will write the following information onto the disk
