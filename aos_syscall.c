@@ -99,7 +99,7 @@ invalidation_wait:
     }
 
     fail = put_new_block(block_index, source, size, old_last);
-    if (fail < 0) goto failure_3;
+    if (fail < 0) goto failure_3; //todo: manage eventual errors on the road (ALL OR NOTHING)
 
     /* Signal completion of PUT operation on given block */
     clear_bit(block_index, info->put_map);
@@ -210,11 +210,10 @@ __SYSCALL_DEFINEx(1, _invalidate_data, uint32_t, offset){
 #else
 asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
-    struct buffer_head *bh, *bh_prev, *bh_next;
+    struct buffer_head *bh;
     struct aos_data_block *data_block;
     unsigned int seq;
     int fail, nblocks, prev, next;
-    bool first, last;
 
     /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
@@ -226,75 +225,70 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     nblocks = info->sb.partition_size;
     if (offset < 2 || offset >= nblocks) {
         fail = -EINVAL;
-        goto failure;
+        goto failure_1;
     }
 
-    /* Check current pending PUT on the same block */
+    /* Signal a pending INV on selected block. Test and set is used to atomically detect concurrent invalidations
+     * on the same block and stop them all except for the first to set the flag. */
+    if (test_and_set_bit(offset, info->inv_map)) {
+        fail = -ENODATA;
+        goto failure_1;
+    }
+
+    /* checkme: merge these conditions?? won't be atomic altogether but neither is the branch prediction nor the
+     *  second condition */
+    /* Check current pending PUT on the same block: if a PUT is pending on the block it means that the block
+     * has currently no valid data associated yet. This falls into the case of ENODATA error. */
     if (test_bit(offset, info->put_map)) {
         fail = -ENODATA;
-        goto failure;
+        goto failure_2;
     }
 
+    // todo: wait to perform the operations
+    /* If a PUT is executing, then wait -> mutex
+     * When the mutex is acquired, check if 'offset' is 'last':
+     * - if it is, then hold the lock and perform the operations
+     * - if it's not, then release the lock and perform the operations */
+
+    /* After receiving the green light from PUT to keep going, retrieve block 'offset' and
+     * read 'prev' and 'next'. Wait on bits 'prev' and 'next' in INV_MAP and then keep going. */
     /* Read a block until no concurrent write is detected */
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
             fail = -EIO;
-            goto failure;
+            goto failure_2;
         }
         data_block = (struct aos_data_block*)bh->b_data;
     } while (read_seqretry(&info->block_locks[offset], seq));
 
-    /* Check the presence of valid data in the block */
+    /* WARNING: this may cause a deadlock between concurrent INV on sequential blocks. Should abort one of them? */
+    wait_on_bit(info->inv_map, data_block->metadata.prev, TASK_INTERRUPTIBLE);
+    wait_on_bit(info->inv_map, data_block->metadata.next, TASK_INTERRUPTIBLE);
+
+    /* Check the presence of valid data in the block
     if (!data_block->metadata.is_valid) {
         brelse(bh);
         fail = -ENODATA;
         goto failure;
     }
+     */
 
-    /* Change the block's metadata */
-    write_seqlock(&info->block_locks[offset]);
-    data_block->metadata.is_valid = 0;
-    prev = data_block->metadata.prev;
-    next = data_block->metadata.next;
-
-    write_seqlock(&info->block_locks[prev]);
-    bh_prev = sb_bread(info->vfs_sb, prev);
-    if(!bh_prev) {
-        fail = -EIO;
-        goto failure;
-    }
-    ((struct aos_data_block*)bh->b_data)->metadata.next = next;
-    mark_buffer_dirty(bh_prev);
-    brelse(bh_prev);
-    write_sequnlock(&info->block_locks[prev]);
-
-    write_seqlock(&info->block_locks[next]);
-    bh_next = sb_bread(info->vfs_sb, next);
-    if(!bh_next) {
-        fail = -EIO;
-        goto failure;
-    }
-    ((struct aos_data_block*)bh->b_data)->metadata.prev = prev;
-    mark_buffer_dirty(bh_next);
-    brelse(bh_next);
-    write_sequnlock(&info->block_locks[next]);
-
-    mark_buffer_dirty(bh);
-    brelse(bh);
-    write_sequnlock(&info->block_locks[offset]);
-
-
+    fail = invalidate_block(offset, data_block, bh);
+    if (fail < 0) goto failure_2;
 
     /* Set invalid block as free to write on */
     clear_bit(offset, info->free_blocks);
+    clear_bit(offset, info->inv_map);
 
     __sync_fetch_and_sub(&info->count, 1);
     AUDIT { printk(KERN_INFO "%s: [invalidate_data()] successful - invalidated block %d\n", MODNAME, offset); }
     return 0;
 
-    failure:
+    failure_2:
+        clear_bit(offset, info->inv_map);
+    failure_1:
         __sync_fetch_and_sub(&info->count, 1);
         AUDIT { printk(KERN_INFO "%s: [invalidate_data()] on block %d failed with error %d.\n", MODNAME, offset, fail); }
         return fail;
