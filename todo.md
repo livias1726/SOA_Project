@@ -21,7 +21,8 @@ Using metadata: ogni blocco ha nei metadati l'indice del proprio successore e pr
 
 ## INV
 1. Check device and params.
-2. Test_and_Set INV usage on blk_idx -> if found set, then another INV on the same block is already pending. -> No INV on the same block.
+2. Test_and_Set INV usage on blk_idx -> if found set, then another INV on the same block is already pending. 
+-> No INV on the same block.
 3. If blk_idx is used by PUT, return. If blk_idx.prev is used by PUT, wait -> No PUT conflict.
 4. Test_and_clear blk_idx on free block. If already cleared, return -> No INV on the same block. (REDUNDANT)
 5. If blk_idx.prev and blk_idx.next are used by INV, wait -> No conflicts on concurrent INV.

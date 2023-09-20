@@ -60,7 +60,8 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int len, ret, nblocks, data_block_size, bytes_read, blocks_read;
+    int len, ret, nblocks, data_block_size, bytes_read, last_block;
+    bool is_last;
     unsigned int seq;
     char *msg, *block_msg;
     loff_t b_idx, offset;
@@ -82,13 +83,15 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     b_idx = (*f_pos >> 32) % nblocks;   // retrieve last block accessed by the current thread (high 32 bits)
     if (!b_idx) b_idx = info->first; // todo: maybe need to be atomic
     offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread in the block (low 32 bits)
+    last_block = info->last;
 
     printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
            MODNAME, current->pid, b_idx, offset);
 
     bytes_read = 0;
-    blocks_read = 1;
     do {
+        is_last = (b_idx == last_block);
+
         /* Read data block into a local variable */
         do {
             seq = read_seqbegin(&info->block_locks[b_idx]);
@@ -107,8 +110,6 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
             b_idx = data_block.metadata.next;
             continue;
         }
-
-        blocks_read++;
 
         /* Use the file pointer offset to start reading from given position in the file */
         if (offset) {
@@ -145,7 +146,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         }
 
         b_idx = data_block.metadata.next;
-    } while((bytes_read < count) && (b_idx != 0) && (blocks_read < nblocks));
+    } while((bytes_read < count) && (!is_last));
 
     // set high 32 bits of f_pos to the current index i and low 32 bits of f_pos to the new offset count
     *f_pos = (b_idx << 32) | offset;
