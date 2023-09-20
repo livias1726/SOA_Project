@@ -1,13 +1,7 @@
-* TEST: use only checks on free map when possible (avoid using the valid metadata)
-  * Reading block to retrieve availability sets an order between operations and can trigger a retry if an 
-    invalidation is done before.
-    * If validity is checked from bitmap before reading, it will be preserved the starting order of writings
-    meaning that if an invalidation is performed while reading, this will not invalidate the get operation.
-    This does not happen when the validity is checked from metadata after the reading.
+# CHRONOLOGICAL READ
 
-# TEST ALGORITMI DI LETTURA
-
-Using metadata: ogni blocco ha nei metadati l'indice del proprio successore e precedente.
+Using metadata: each block maintains a reference to its predecessor 
+(to update 'last' when the last block of the chronological chain is invalidated) and successor (to read chronologically)
 
 ## PUT 
 1. Check device and params.
@@ -38,17 +32,12 @@ Using metadata: ogni blocco ha nei metadati l'indice del proprio successore e pr
   * On same block: test_and_set loop.
   * On different blocks: CAS on last -> writings on the same block will touch different metadata (order doesn't matter) 
 * PUT-INV -> INV on the same block or on 'last'
-  * On same block: PUT sets bit in put_mask -> INV is rejected (trying to invalidate a message not yet created)
+  * On same block: PUT sets the bit in put_mask -> INV is rejected (trying to invalidate a message not yet created)
   * **On different blocks: ???**
 * INV-PUT: 
-  * se INV sta operando su last, PUT deve attendere che abbia finito così da prelevare il nuovo valore di last 
+  * On 'last', any PUT needs to wait to use a correct value for 'last'.  
+  * On other blocks, no conflicts -> if the new next is 'last', it will be changed its 'prev' while PUT writes on 'next'.
 * INV-INV: 
-  * ordinate con test_and_clear per lo stesso blocco. INV concorrenti non possono operare sul blocco precedente e 
-          successivo a quello in invalidazione. Devono attendere la fine della precedente.
+  * On same block: test_and_set loop on INV_MAP.
+  * On different blocks: generates conflicts when operating concurrently on a 'prev' or 'next' used by another INV.
 
-### Write Seqlocks handling
-* When more than 1 thread writes on the same block but on different metadata, writers can operate concurrently.
-* To get the write_lock on the block and release it, it can be used a counter variable: 
-  * If the variable was 0 before increasing its value, take the write_lock.
-  * If the variable becomes 0 after decreasing its value, release the write_lock.
-* Writers that can be concurrent won't block each other.

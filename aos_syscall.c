@@ -228,19 +228,23 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         goto failure_1;
     }
 
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] started on block %d by thread %d\n", MODNAME, offset, current->pid); }
+
     /* Signal a pending INV on selected block. Test and set is used to atomically detect concurrent invalidations
      * on the same block and stop them all except for the first to set the flag. */
     if (test_and_set_bit(offset, info->inv_map)) {
         fail = -ENODATA;
+        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] - thread %d exiting: invalidation on %d already executing\n",
+                       MODNAME, current->pid, offset); }
         goto failure_1;
     }
 
-    /* checkme: merge these conditions?? won't be atomic altogether but neither is the branch prediction nor the
-     *  second condition */
     /* Check current pending PUT on the same block: if a PUT is pending on the block it means that the block
      * has currently no valid data associated yet. This falls into the case of ENODATA error. */
     if (test_bit(offset, info->put_map)) {
         fail = -ENODATA;
+        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] - thread %d exiting: put of %d in execution\n",
+                       MODNAME, current->pid, offset); }
         goto failure_2;
     }
 
@@ -263,17 +267,23 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         data_block = (struct aos_data_block*)bh->b_data;
     } while (read_seqretry(&info->block_locks[offset], seq));
 
-    /* WARNING: this may cause a deadlock between concurrent INV on sequential blocks. Should abort one of them? */
-    wait_on_bit(info->inv_map, data_block->metadata.prev, TASK_INTERRUPTIBLE);
-    wait_on_bit(info->inv_map, data_block->metadata.next, TASK_INTERRUPTIBLE);
-
-    /* Check the presence of valid data in the block
+    /* TODO Check the presence of valid data in the block like this or with test_and_clear??? */
     if (!data_block->metadata.is_valid) {
         brelse(bh);
         fail = -ENODATA;
-        goto failure;
+        goto failure_2;
     }
-     */
+
+    /* WARNING: this may cause a deadlock between concurrent INV on sequential blocks. Should abort one of them? */
+    wait_on_bit(info->inv_map, data_block->metadata.prev, TASK_INTERRUPTIBLE);
+
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] - thread %d - prev of %d is unlocked\n",
+                   MODNAME, current->pid, offset); }
+
+    wait_on_bit(info->inv_map, data_block->metadata.next, TASK_INTERRUPTIBLE);
+
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] - thread %d - next of %d is unlocked\n",
+                   MODNAME, current->pid, offset); }
 
     fail = invalidate_block(offset, data_block, bh);
     if (fail < 0) goto failure_2;
