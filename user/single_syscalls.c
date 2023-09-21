@@ -36,7 +36,7 @@ void test_put_data(){
     printf("Test parameters:\n\tsource = \"%s\"\n\tsize = %d\n", msg, size);
     ret = syscall(put, msg, size);
     if(ret < 0) {
-        check_error(0);
+        check_error(0, "PUT");
     } else {
         printf("Message correctly written in block %d\n", ret);
     }
@@ -61,7 +61,7 @@ void test_get_data() {
 
     ret = syscall(get, block, msg, size);
     if(ret < 0) {
-        check_error(0);
+        check_error(0, "GET");
     } else {
         printf("Retrieved %d bytes: \"%s\"\n", ret, msg);
     }
@@ -77,7 +77,7 @@ void test_invalidate_data(){
 
     ret = syscall(inv, block);
     if(ret < 0) {
-        check_error(0);
+        check_error(0, "INV");
     } else {
         printf("Block %d invalidated.\n", block);
     }

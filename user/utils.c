@@ -42,22 +42,25 @@ int check_input(int argc, char *argv[]){
     return 0;
 }
 
-void check_error(int tid){
+void check_error(int tid, char* call){
     switch(errno){
         case ENODEV:
-            printf("[%d] - Device not mounted.\n", tid);
+            printf("[%s, %d] - Device not mounted.\n", call, tid);
             break;
         case EINVAL:
-            printf("[%d] - Input parameters are invalid.\n", tid);
+            printf("[%s, %d] - Input parameters are invalid.\n", call, tid);
             break;
         case ENOMEM:
-            printf("[%d] - Unavailable memory on device.\n", tid);
+            printf("[%s, %d] - Unavailable memory on device.\n", call, tid);
             break;
         case EIO:
-            printf("[%d] - Couldn't read device block.\n", tid);
+            printf("[%s, %d] - Couldn't read device block.\n", call, tid);
             break;
         case ENODATA:
-            printf("[%d] - Unavailable data.\n", tid);
+            printf("[%s, %d] - Unavailable data.\n", call, tid);
+            break;
+        case EAGAIN:
+            printf("[%s, %d] - Try again.\n", call, tid);
             break;
     }
 }

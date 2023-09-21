@@ -13,7 +13,7 @@ void* test_put_data(void *arg){
 
     ret = syscall(put, msg, size);
     if(ret < 0) {
-        check_error(tid);
+        check_error(tid, "PUT");
         pthread_exit((void*)-1);
     } else {
         printf("[%d] - PUT on %d\n", tid, ret);
@@ -28,7 +28,7 @@ void* test_get_data(void *arg) {
 
     ret = syscall(get, (tid%NBLOCKS)+2, msg, SIZE_LOREM);
     if(ret < 0) {
-        check_error(tid);
+        check_error(tid, "GET");
         pthread_exit((void*)-1);
     } else {
         printf("[%d] - GET from %d (%.*s)\n", tid, (tid%NBLOCKS)+2, 10, msg);
@@ -37,15 +37,15 @@ void* test_get_data(void *arg) {
 }
 
 void* test_invalidate_data(void *arg){
-    int ret, tid = *(int*)arg;
+    int ret, tid = *(int*)arg, block;
 
-    //ret = syscall(inv, (tid%NBLOCKS)+2);
-    ret = syscall(inv, (rand()%NBLOCKS)+2);
+    block = (rand()%NBLOCKS)+2; //(tid%NBLOCKS)+2;
+    ret = syscall(inv, block);
     if(ret < 0) {
-        check_error(tid);
+        check_error(tid, "INV");
         pthread_exit((void*)-1);
     } else {
-        printf("[%d] - INV on %d\n", tid, (tid%NBLOCKS)+2);
+        printf("[%d] - INV on %d\n", tid, block);
         pthread_exit(0);
     }
 }

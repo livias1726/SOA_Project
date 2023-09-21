@@ -32,6 +32,6 @@ int inv;
 
 int check_input(int argc, char **argv);
 int getint();
-void check_error(int tid);
+void check_error(int tid, char* call);
 
 #endif //SOA_PROJECT_USER_H
