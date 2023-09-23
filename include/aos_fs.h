@@ -71,13 +71,19 @@ struct aos_data_block {
 typedef struct aos_fs_info {
     struct super_block *vfs_sb; /* VFS super block structure */
     struct aos_super_block sb;  /* AOS super block structure */
-    uint8_t is_mounted;         /* Change this atomically */
-    uint64_t count;             /* Number of thread currently operating on the device */
+    // todo: is_mounted can be signalled with a single bit - see if it can be merged with count in a variable "state"
+    uint8_t is_mounted;         /* Signals that the state of the device */
+    uint64_t count;             /* Number of threads currently operating on the device */
+    // todo: see if this can be a single variable (32 bit each) ------------------------
     uint64_t first;             /* First valid block written chronologically */
     uint64_t last;              /* Last valid block written chronologically */
+    //---------------------------------------------------------------------------
     ulong *free_blocks;         /* Pointer to a bitmap to represent the state of each data block */
+    // todo: see if writers flags can be handled better
     ulong *put_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
     ulong *inv_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
+    ulong inv_put_lock;      /* Change this atomically: this only needs 2 bits (1 for INV, 1 for PUT) */
+    //------------------------------------------------------------------------
     seqlock_t *block_locks;
 } aos_fs_info_t;
 #endif

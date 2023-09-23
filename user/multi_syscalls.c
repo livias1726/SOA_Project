@@ -40,9 +40,13 @@ void* test_invalidate_data(void *arg){
     int ret, tid = *(int*)arg, block;
 
     block = (rand()%NBLOCKS)+2; //(tid%NBLOCKS)+2;
+
+retry:
     ret = syscall(inv, block);
     if(ret < 0) {
         check_error(tid, "INV");
+        if (ret == -EAGAIN) goto retry;
+
         pthread_exit((void*)-1);
     } else {
         printf("[%d] - INV on %d\n", tid, block);
