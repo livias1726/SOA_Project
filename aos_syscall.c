@@ -239,9 +239,9 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     /* Check current pending PUT on the same block: if a PUT is pending on the block it means that the block
      * has currently no valid data associated yet. This falls into the case of ENODATA error. */
-    if (test_bit(offset, info->put_map)) {
+    if (test_bit(offset, info->put_map) || !test_bit(offset, info->free_blocks)) {
         fail = -ENODATA;
-        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Put of %d executing\n",
+        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Put of %d executing or unavailable data.\n",
                        MODNAME, current->pid, offset); }
         goto failure_2;
     }
@@ -266,12 +266,12 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         data_block = (struct aos_data_block*)bh->b_data;
     } while (read_seqretry(&info->block_locks[offset], seq));
 
-    /* Check the presence of valid data in the block */
+    /* Check the presence of valid data in the block
     if (!data_block->metadata.is_valid) {
         brelse(bh);
         fail = -ENODATA;
         goto failure_2;
-    }
+    }*/
 
     /* Wait on bits 'prev' and 'next' in INV_MAP to keep going. Avoid conflicts between concurrent invalidations.
      * To avoid possible deadlocks between invalidations (which has to lock 3 blocks to execute), the wait is
