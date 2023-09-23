@@ -48,7 +48,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     avb_size = aos_sb.data_block_size;
     if (size+1 >= avb_size) {
         fail = -EINVAL;
-        goto failure;
+        goto failure_1;
     }
 
     /* Read bitmap to find a free block */
@@ -57,7 +57,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
         block_index = find_first_zero_bit(info->free_blocks, nblocks);
         if(block_index == nblocks) { // no free block was found
             fail = -ENOMEM;
-            goto failure;
+            goto failure_1;
         }
     /* ATOMICALLY test and set the bit of the free block: if a concurrent PUT retrieved the same block index, only
      * the first one to set the bit will be able to use it. The other one will try to find a new free block */
@@ -69,7 +69,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     /* Signal a pending PUT for possible INVALIDATION conflicts. 'first_put' will be 0 if this thread is the first
      * to execute the PUT in a concurrent execution */
-    first_put = test_and_set_bit(0, &info->inv_put_lock);
+    first_put = test_and_set_bit(PUT_BIT, &info->inv_put_lock);
 
     /* Wait for the completion of an eventual INVALIDATION on 'last':
      * that's the only conflict that can happen between INV and PUT. */
@@ -113,9 +113,10 @@ asmlinkage int sys_put_data(char * source, size_t size){
         if(!first_put) clear_bit(0, &info->inv_put_lock);
         clear_bit(block_index, info->free_blocks);
         clear_bit(block_index, info->put_map);
-    failure:
+    failure_1:
         __sync_fetch_and_sub(&info->count, 1);
-        AUDIT { printk(KERN_INFO "%s: [put_data()] failed on error %d\n", MODNAME, fail); }
+        AUDIT { printk(KERN_INFO "%s: [put_data()- %d] Put failed on error %d\n",
+                       MODNAME, current->pid, fail); }
         return fail;
 }
 
@@ -226,13 +227,14 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         goto failure_1;
     }
 
-    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] started on block %d by thread %d\n", MODNAME, offset, current->pid); }
+    DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Started on block %d\n",
+                   MODNAME, current->pid, offset); }
 
     /* Signal a pending INV on selected block. Test and set is used to atomically detect concurrent invalidations
      * on the same block and stop them all except for the first to set the flag. */
     if (test_and_set_bit(offset, info->inv_map)) {
         fail = -ENODATA;
-        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] - thread %d exiting: invalidation on %d already executing\n",
+        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Invalidation on %d executing\n",
                        MODNAME, current->pid, offset); }
         goto failure_1;
     }
@@ -241,14 +243,19 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
      * has currently no valid data associated yet. This falls into the case of ENODATA error. */
     if (test_bit(offset, info->put_map)) {
         fail = -ENODATA;
-        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] - thread %d exiting: put of %d in execution\n",
+        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Put of %d executing\n",
                        MODNAME, current->pid, offset); }
         goto failure_2;
     }
 
     /* If the invalidation operates on 'last' block, it must wait for the PUT that is eventually
-     * currently operating on last */
-    if (offset == info->last) wait_on_bit(&info->inv_put_lock, 0, TASK_INTERRUPTIBLE);
+     * currently operating on last. This is the PUT that firstly set the specific bit in 'inv_put_lock'.
+     * TODO: This assumes that the PUT that sets this bit is also the PUT that will perform its operations on 'last'. */
+    if (offset == info->last) {
+        wait_on_bit(&info->inv_put_lock, PUT_BIT, TASK_INTERRUPTIBLE);
+        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Invalidation on last (%d) - Wait successful.\n",
+                       MODNAME, current->pid, offset); }
+    }
 
     /* Read a block until no concurrent write is detected */
     do {
@@ -280,7 +287,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         }
         trials++;
     }while (wait_prev);
-    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] - thread %d - prev of %d (%llu) is unlocked\n",
+    DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Prev of %d (%llu) is unlocked\n",
                    MODNAME, current->pid, offset, data_block->metadata.prev); }
 
     trials = 0;
@@ -292,7 +299,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         }
         trials++;
     } while (wait_next);
-    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] - thread %d - next of %d (%llu) is unlocked\n",
+    DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Next of %d (%llu) is unlocked\n",
                    MODNAME, current->pid, offset, data_block->metadata.next); }
 
     /* Proceed with the invalidation without conflicts */
@@ -304,14 +311,15 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     clear_bit(offset, info->inv_map);
 
     __sync_fetch_and_sub(&info->count, 1);
-    AUDIT { printk(KERN_INFO "%s: [invalidate_data()] successful - invalidated block %d\n", MODNAME, offset); }
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data() - %d] Invalidated block %d\n", MODNAME, current->pid, offset); }
     return 0;
 
     failure_2:
         clear_bit(offset, info->inv_map);
     failure_1:
         __sync_fetch_and_sub(&info->count, 1);
-        AUDIT { printk(KERN_INFO "%s: [invalidate_data()] on block %d failed with error %d.\n", MODNAME, offset, fail); }
+        AUDIT { printk(KERN_INFO "%s: [invalidate_data()- %d] Invalidation of block %d failed with error %d.\n",
+                       MODNAME, current->pid, offset, fail); }
         return fail;
 }
 

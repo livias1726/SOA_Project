@@ -5,9 +5,11 @@
 
 #define MODNAME "AOS"
 #define AUDIT if(1)
+#define DEBUG if(1)
 #define WB if(0)
 #define JIFFIES 100
 #define SYSCALL_TRIALS 10
+#define PUT_BIT 0
 
 //MODULE_LICENSE("GPL");
 

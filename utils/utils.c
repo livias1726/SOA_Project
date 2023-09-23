@@ -50,6 +50,17 @@ int put_new_block(int blk, char* source, size_t size, int prev){
     return size;
 }
 
+/*
+ * Performs the writings on the device to invalidate the given block.
+ * 1. Updates the metadata of the block to invalidate.
+ * 2. Checks which case is currently executing (block to invalidate is the first, last, both or neither in the chain).
+ *    If the block to invalidate is:
+ * 2.1. The first, the 'first' variable needs to be updated with the index of its next block.
+ * 2.2. The last, the 'last' variable needs to be updated with the index of its previous block.
+ * 2.3. Both the first and the last, the 'last' variable needs to be updated to 1 as a placeholder.
+ * 2.4. Neither the first nor the last, the metadata of the previous and next blocks must be
+ *      updated to point to one-another and unlink the invalid block.
+ * */
 int invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
     int pc, fail;
     uint64_t prev, next;
