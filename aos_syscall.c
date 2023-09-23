@@ -63,6 +63,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
      * the first one to set the bit will be able to use it. The other one will try to find a new free block */
     } while (test_and_set_bit(block_index, info->free_blocks));
 
+    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Started on block %llu\n",
+                   MODNAME, current->pid, block_index); }
+
     /* Signal a pending PUT on selected block.
      * This cannot cause conflicts with other PUT operations thanks to the above loop.*/
     set_bit(block_index, info->put_map);
@@ -71,52 +74,50 @@ asmlinkage int sys_put_data(char * source, size_t size){
      * to execute the PUT in a concurrent execution */
     first_put = test_and_set_bit(PUT_BIT, &info->inv_put_lock);
 
+    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Set a pending PUT with outcome: %d\n",
+                   MODNAME, current->pid, first_put); }
+
     /* Wait for the completion of an eventual INVALIDATION on 'last':
      * that's the only conflict that can happen between INV and PUT. */
     wait_on_bit(info->inv_map, info->last, TASK_INTERRUPTIBLE);
+
+    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Invalidation on 'last' (%llu) is cleared. \n",
+                   MODNAME, current->pid, info->last); }
 
     /* ATOMICALLY update the last block to be written via 'last' variable.
      * The order in which this operation is performed is what will order concurrent PUT: the first to update
      * this value will be the first to write a new block chronologically (change metadata in the previous block['last'])
      * and update new block metadata accordingly.
      * */
-    __atomic_exchange(&info->last, &block_index, &old_last, __ATOMIC_SEQ_CST);
+    old_last = __atomic_exchange_n(&info->last, block_index, __ATOMIC_SEQ_CST);
 
-    /* If the block is the first to be written (old_last is 1), then there's no need to update the preceding one
-     * to point to the new block. Else, the 'old_last' block must be updated to point to the new one in 'next' metadata
-     * */
-    if (old_last == 1) {
-        old_first = __sync_val_compare_and_swap(&info->first, info->first, block_index);
-    } else {
-        /* Writes on the 'next' metadata of the previous block (old_last) */
-        fail = change_next_block(old_last, block_index);
-        if (fail < 0) goto failure_2;
-    }
+    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'last' from %llu to %llu. \n",
+                   MODNAME, current->pid, old_last, block_index); }
 
-    fail = put_new_block(block_index, source, size, old_last);
-    if (fail < 0) goto failure_3; //todo: manage eventual errors on the road (ALL OR NOTHING)
+    old_first = -1;
+    fail = put_new_block(block_index, source, size, old_last, &old_first);
+    if (fail < 0) goto failure_2;
 
     /* Signal completion of PUT operation on given block */
     clear_bit(block_index, info->put_map);
-    if(!first_put) clear_bit(0, &info->inv_put_lock);
+    if(!first_put) clear_bit(PUT_BIT, &info->inv_put_lock);
 
     /* Release resources */
     __sync_fetch_and_sub(&info->count, 1);
-    AUDIT { printk(KERN_INFO "%s: [put_data()] successful - written %d bytes in block %llu\n",
-                   MODNAME, fail, block_index); }
+    AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put %d bytes in block %llu\n", MODNAME, current->pid, fail, block_index); }
     return block_index;
 
-    failure_3:
-        __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first' if it was changed
     failure_2:
+        __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first' if it was changed
         __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' if no thread has changed it yet
-        if(!first_put) clear_bit(0, &info->inv_put_lock);
-        clear_bit(block_index, info->free_blocks);
+
+        if(!first_put) clear_bit(PUT_BIT, &info->inv_put_lock);
+
         clear_bit(block_index, info->put_map);
+        clear_bit(block_index, info->free_blocks);
     failure_1:
         __sync_fetch_and_sub(&info->count, 1);
-        AUDIT { printk(KERN_INFO "%s: [put_data()- %d] Put failed on error %d\n",
-                       MODNAME, current->pid, fail); }
+        AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put failed on error %d\n", MODNAME, current->pid, fail); }
         return fail;
 }
 
@@ -187,10 +188,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     loaded_bytes = size - ret;
 
     __sync_fetch_and_sub(&info->count, 1);
-
-    AUDIT { printk(KERN_INFO "%s: [get_data()] successful - read %d bytes in block %llu\n",
-                   MODNAME, loaded_bytes, offset); }
-
+    AUDIT { printk(KERN_INFO "%s: [get_data()] successful - read %d bytes in block %llu\n", MODNAME, loaded_bytes, offset); }
     return loaded_bytes;
 
     failure:
@@ -310,10 +308,12 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     clear_bit(offset, info->free_blocks);
     clear_bit(offset, info->inv_map);
 
+    /* Release resources */
     __sync_fetch_and_sub(&info->count, 1);
     AUDIT { printk(KERN_INFO "%s: [invalidate_data() - %d] Invalidated block %d\n", MODNAME, current->pid, offset); }
     return 0;
 
+    /* Failures behaviour */
     failure_2:
         clear_bit(offset, info->inv_map);
     failure_1:

@@ -9,18 +9,29 @@ extern aos_fs_info_t *info;
 
 /*
  * Inserts a new message in the given block, updating its metadata
- * Used by:
- * - PUT operations to insert a new block in the chain.
  * */
-int put_new_block(int blk, char* source, size_t size, int prev){
+int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int pc;
+    int pc, res;
     size_t ret;
 
     bh = sb_bread(info->vfs_sb, blk);
     if(!bh) return -EIO;
     data_block = (struct aos_data_block*)bh->b_data;
+
+    /* If the block is the first to be written (prev is 1), then there's no need to update the previous one
+     * to point to the new block. */
+    if (prev == 1) {
+        *old_first = __sync_val_compare_and_swap(&info->first, info->first, blk);
+    } else{
+        /* Writes on the 'next' metadata of the previous block (old_last) */
+        res = change_next_block(prev, blk);
+        if (res < 0) goto failure;
+    }
+
+    /* Effective changes in the data block will be done after eventual 'change_next_block()' is successful
+     * to avoid needing to abort the operation. */
 
     /* When more than one thread is allowed to write on the same block
      * it always happens on different data/metadata, so that writers can operate concurrently.
@@ -45,12 +56,14 @@ int put_new_block(int blk, char* source, size_t size, int prev){
         write_sequnlock(&info->block_locks[blk]);
     }
 
-    brelse(bh);
+    res = size;
 
-    return size;
+    failure:
+        brelse(bh);
+        return res;
 }
 
-/*
+/**
  * Performs the writings on the device to invalidate the given block.
  * 1. Updates the metadata of the block to invalidate.
  * 2. Checks which case is currently executing (block to invalidate is the first, last, both or neither in the chain).
