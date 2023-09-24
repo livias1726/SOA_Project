@@ -8,6 +8,119 @@
 extern aos_fs_info_t *info;
 
 /*
+ * Updates the 'next' variable in the metadata of the given block.
+ * Used by:
+ * - PUT operations to chronologically link a block to the next one.
+ * - INV operations to logically remove a block from the chain of readable blocks.
+ * */
+static int change_block_next(int blk, int next_blk){
+    struct buffer_head *bh_prev;
+    struct aos_data_block *prev_block;
+    int pc;
+
+    bh_prev = sb_bread(info->vfs_sb, blk);
+    if(!bh_prev) return -EIO;
+
+    prev_block = (struct aos_data_block*)bh_prev->b_data;
+
+    /* Change previous block's 'next' metadata */
+    pc = __sync_fetch_and_add(&prev_block->metadata.counter, 1);
+    if (!pc) write_seqlock(&info->block_locks[blk]);
+
+    prev_block->metadata.next = next_blk;
+
+    pc = __sync_sub_and_fetch(&prev_block->metadata.counter, 1);
+    if (!pc) {
+        mark_buffer_dirty(bh_prev);
+        write_sequnlock(&info->block_locks[blk]);
+    }
+
+    brelse(bh_prev);
+
+    return 0;
+}
+
+/*
+ * Updates the 'prev' variable in the metadata of the given block.
+ * Used by:
+ * - INV operations to logically remove a block from the chain of readable blocks.
+ * */
+static int change_block_prev(int blk, int prev_blk){
+    struct buffer_head *bh_next;
+    struct aos_data_block *next_block;
+    int pc;
+
+    bh_next = sb_bread(info->vfs_sb, blk);
+    if (!bh_next) return -EIO;
+
+    next_block = (struct aos_data_block*)bh_next->b_data;
+
+    /* Change previous block's 'next' metadata */
+    pc = __sync_fetch_and_add(&next_block->metadata.counter, 1);
+    if (!pc) write_seqlock(&info->block_locks[blk]);
+
+    next_block->metadata.prev = prev_blk;
+
+    pc = __sync_sub_and_fetch(&next_block->metadata.counter, 1);
+    if (!pc) {
+        mark_buffer_dirty(bh_next);
+        write_sequnlock(&info->block_locks[blk]);
+    }
+
+    brelse(bh_next);
+
+    return 0;
+}
+
+/*
+ * Updates both the 'prev' and 'next' variable in the metadata of the given block.
+ * Used by INV operations to logically remove a block from the chain of readable blocks.
+ * */
+static int change_block(int prev_blk, int next_blk){
+    struct buffer_head *bh_next, *bh_prev;
+    struct aos_data_block *next_block, *prev_block;
+    int pc;
+
+    bh_prev = sb_bread(info->vfs_sb, prev_blk);
+    if(!bh_prev) return -EIO;
+    prev_block = (struct aos_data_block*)bh_prev->b_data;
+
+    bh_next = sb_bread(info->vfs_sb, next_blk);
+    if (!bh_next) return -EIO;
+    next_block = (struct aos_data_block*)bh_next->b_data;
+
+    /* Change previous block's 'next' metadata */
+    pc = __sync_fetch_and_add(&prev_block->metadata.counter, 1);
+    if (!pc) write_seqlock(&info->block_locks[prev_blk]);
+
+    prev_block->metadata.next = next_blk;
+
+    pc = __sync_sub_and_fetch(&prev_block->metadata.counter, 1);
+    if (!pc) {
+        mark_buffer_dirty(bh_prev);
+        write_sequnlock(&info->block_locks[prev_blk]);
+    }
+
+    brelse(bh_prev);
+
+    /* Change next block's 'prev' metadata */
+    pc = __sync_fetch_and_add(&next_block->metadata.counter, 1);
+    if (!pc) write_seqlock(&info->block_locks[next_blk]);
+
+    next_block->metadata.prev = prev_blk;
+
+    pc = __sync_sub_and_fetch(&next_block->metadata.counter, 1);
+    if (!pc) {
+        mark_buffer_dirty(bh_next);
+        write_sequnlock(&info->block_locks[next_blk]);
+    }
+
+    brelse(bh_next);
+
+    return 0;
+}
+
+/*
  * Inserts a new message in the given block, updating its metadata
  * */
 int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
@@ -26,7 +139,7 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
         *old_first = __sync_val_compare_and_swap(&info->first, info->first, blk);
     } else{
         /* Writes on the 'next' metadata of the previous block (old_last) */
-        res = change_next_block(prev, blk);
+        res = change_block_next(prev, blk);
         if (res < 0) goto failure;
     }
 
@@ -74,112 +187,84 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
  * 2.4. Neither the first nor the last, the metadata of the previous and next blocks must be
  *      updated to point to one-another and unlink the invalid block.
  * */
-int invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
-    int pc, fail;
-    uint64_t prev, next;
-    bool is_first, is_first_or_last;
+static inline void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
+    int pc;
 
     pc = __sync_fetch_and_add(&data_block->metadata.counter, 1);
     if (!pc) write_seqlock(&info->block_locks[blk]); // the first to operate on the block takes the write lock
 
     /* Change the block's metadata */
     data_block->metadata.is_valid = 0;
-    prev = data_block->metadata.prev;
-    next = data_block->metadata.next;
-
-    /* If blk is 'first' then change 'first' to 'next'*/
-    is_first = __sync_bool_compare_and_swap(&info->first, blk, next);
-    if (is_first) {
-        /* If blk is 'first' AND 'last' then change 'last' to 1 */
-        is_first_or_last = (__sync_bool_compare_and_swap(&info->last, blk, 1) || is_first);
-    } else {
-        /* If blk is 'last' but not 'first' then change 'last' to 'prev' */
-        is_first_or_last = (__sync_bool_compare_and_swap(&info->last, blk, prev) || is_first);
-    }
-
-    /* Else, update previous and next block */
-    if (!is_first_or_last) {
-        /* Write on previous block */
-        fail = change_next_block(prev, next);
-        if (fail < 0) return fail;
-
-        /* Write on successive block */
-        fail = change_prev_block(next, prev);
-        if (fail < 0) return fail;
-    }
 
     pc = __sync_sub_and_fetch(&data_block->metadata.counter, 1);
     if (!pc) { // the last to operate on the block releases the write lock
         mark_buffer_dirty(bh);
         write_sequnlock(&info->block_locks[blk]);
     }
-
-    brelse(bh);
-
-    return 0;
 }
 
-/*
- * Updates the 'next' variable in the metadata of the given block.
- * Used by:
- * - PUT operations to chronologically link a block to the next one.
- * - INV operations to logically remove a block from the chain of readable blocks.
- * */
-int change_next_block(int blk, int next_blk){
-    struct buffer_head *bh_prev;
-    struct aos_data_block *prev_block;
-    int pc;
+int invalidate_first_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
+    int fail = 0;
 
-    bh_prev = sb_bread(info->vfs_sb, blk);
-    if(!bh_prev) return -EIO;
+    /* If 'offset' is 'first' AND 'last' then change 'last' to 1 and don't wait */
+    bool last = __sync_bool_compare_and_swap(&info->last, blk, 1);
 
-    prev_block = (struct aos_data_block*)bh_prev->b_data;
+    /* If 'offset' is 'first' but NOT 'last', wait on 'next' */
+    if(!last) {
+        fail = wait_inv(info->inv_map, data_block->metadata.next);
+        if (fail < 0) goto failure;
 
-    /* Change previous block's 'next' metadata */
-    pc = __sync_fetch_and_add(&prev_block->metadata.counter, 1);
-    if (!pc) write_seqlock(&info->block_locks[blk]);
-
-    prev_block->metadata.next = next_blk;
-
-    pc = __sync_sub_and_fetch(&prev_block->metadata.counter, 1);
-    if (!pc) {
-        mark_buffer_dirty(bh_prev);
-        write_sequnlock(&info->block_locks[blk]);
+        fail = change_block_prev(data_block->metadata.next, 1);
+        if (fail < 0) goto failure;
     }
 
-    brelse(bh_prev);
+    invalidate_block(blk, data_block, bh);
 
-    return 0;
+    failure:
+        brelse(bh);
+        return fail;
 }
 
-/*
- * Updates the 'prev' variable in the metadata of the given block.
- * Used by:
- * - INV operations to logically remove a block from the chain of readable blocks.
- * */
-int change_prev_block(int blk, int prev_blk){
-    struct buffer_head *bh_next;
-    struct aos_data_block *next_block;
-    int pc;
+int invalidate_last_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
+    int fail;
 
-    bh_next = sb_bread(info->vfs_sb, blk);
-    if (!bh_next) return -EIO;
+    /* If blk is 'last' but not 'first' then change 'last' to 'prev' */
+    fail = wait_inv(info->inv_map, data_block->metadata.prev);
+    if (fail < 0) goto failure;
 
-    next_block = (struct aos_data_block*)bh_next->b_data;
+    fail = change_block_next(data_block->metadata.prev, 0);
+    if (fail < 0) goto failure;
 
-    /* Change previous block's 'next' metadata */
-    pc = __sync_fetch_and_add(&next_block->metadata.counter, 1);
-    if (!pc) write_seqlock(&info->block_locks[blk]);
+    invalidate_block(blk, data_block, bh);
 
-    next_block->metadata.prev = prev_blk;
-
-    pc = __sync_sub_and_fetch(&next_block->metadata.counter, 1);
-    if (!pc) {
-        mark_buffer_dirty(bh_next);
-        write_sequnlock(&info->block_locks[blk]);
-    }
-
-    brelse(bh_next);
-
-    return 0;
+    failure:
+        brelse(bh);
+        return fail;
 }
+
+int invalidate_middle_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
+    int fail;
+    uint64_t prev, next;
+
+    prev = data_block->metadata.prev;
+    next = data_block->metadata.next;
+
+    /* Wait on bits 'prev' and 'next' in INV_MAP to keep going. Avoid conflicts between concurrent invalidations.
+     * To avoid possible deadlocks between invalidations (which has to lock 3 blocks to execute), the wait is
+     * temporized: invalidations can abort and return with EAGAIN to retry the operation. */
+    fail = wait_inv(info->inv_map, prev);
+    if (fail < 0) goto failure;
+    fail = wait_inv(info->inv_map, next);
+    if (fail < 0) goto failure;
+
+    /* Write new 'prev' and 'next' on blocks */
+    fail = change_block(prev, next);
+    if (fail < 0) goto failure;
+
+    invalidate_block(blk, data_block, bh);
+
+    failure:
+        brelse(bh);
+        return fail;
+}
+

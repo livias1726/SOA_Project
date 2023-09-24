@@ -63,8 +63,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
      * the first one to set the bit will be able to use it. The other one will try to find a new free block */
     } while (test_and_set_bit(block_index, info->free_blocks));
 
-    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Started on block %llu\n",
-                   MODNAME, current->pid, block_index); }
+    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Started on block %llu\n", MODNAME, current->pid, block_index); }
 
     /* Signal a pending PUT on selected block.
      * This cannot cause conflicts with other PUT operations thanks to the above loop.*/
@@ -74,15 +73,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
      * to execute the PUT in a concurrent execution */
     first_put = test_and_set_bit(PUT_BIT, &info->inv_put_lock);
 
-    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Set a pending PUT with outcome: %d\n",
-                   MODNAME, current->pid, first_put); }
-
     /* Wait for the completion of an eventual INVALIDATION on 'last':
      * that's the only conflict that can happen between INV and PUT. */
     wait_on_bit(info->inv_map, info->last, TASK_INTERRUPTIBLE);
-
-    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Invalidation on 'last' (%llu) is cleared. \n",
-                   MODNAME, current->pid, info->last); }
 
     /* ATOMICALLY update the last block to be written via 'last' variable.
      * The order in which this operation is performed is what will order concurrent PUT: the first to update
@@ -209,8 +202,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     struct buffer_head *bh;
     struct aos_data_block *data_block;
     unsigned int seq;
-    int fail, nblocks, trials;
-    bool wait_prev, wait_next;
+    int fail, nblocks;
 
     /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
@@ -225,15 +217,12 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         goto failure_1;
     }
 
-    DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Started on block %d\n",
-                   MODNAME, current->pid, offset); }
+    DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Started on block %d\n", MODNAME, current->pid, offset); }
 
     /* Signal a pending INV on selected block. Test and set is used to atomically detect concurrent invalidations
      * on the same block and stop them all except for the first to set the flag. */
     if (test_and_set_bit(offset, info->inv_map)) {
         fail = -ENODATA;
-        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Invalidation on %d executing\n",
-                       MODNAME, current->pid, offset); }
         goto failure_1;
     }
 
@@ -241,8 +230,6 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
      * has currently no valid data associated yet. This falls into the case of ENODATA error. */
     if (test_bit(offset, info->put_map) || !test_bit(offset, info->free_blocks)) {
         fail = -ENODATA;
-        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Put of %d executing or unavailable data.\n",
-                       MODNAME, current->pid, offset); }
         goto failure_2;
     }
 
@@ -266,43 +253,17 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         data_block = (struct aos_data_block*)bh->b_data;
     } while (read_seqretry(&info->block_locks[offset], seq));
 
-    /* Check the presence of valid data in the block
-    if (!data_block->metadata.is_valid) {
-        brelse(bh);
-        fail = -ENODATA;
-        goto failure_2;
-    }*/
-
-    /* Wait on bits 'prev' and 'next' in INV_MAP to keep going. Avoid conflicts between concurrent invalidations.
-     * To avoid possible deadlocks between invalidations (which has to lock 3 blocks to execute), the wait is
-     * temporized: invalidations can abort and return with EAGAIN to retry the operation. */
-    trials = 0;
-    do{ /* Wait on 'prev' */
-        wait_prev = wait_on_bit_timeout(info->inv_map, data_block->metadata.prev, TASK_INTERRUPTIBLE, JIFFIES);
-        if (trials > SYSCALL_TRIALS) {
-            fail = -EAGAIN;
-            goto failure_2;
-        }
-        trials++;
-    }while (wait_prev);
-    DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Prev of %d (%llu) is unlocked\n",
-                   MODNAME, current->pid, offset, data_block->metadata.prev); }
-
-    trials = 0;
-    do{ /* Wait on 'next' */
-        wait_next = wait_on_bit_timeout(info->inv_map, data_block->metadata.next, TASK_INTERRUPTIBLE, JIFFIES);
-        if (trials > SYSCALL_TRIALS) {
-            fail = -EAGAIN;
-            goto failure_2;
-        }
-        trials++;
-    } while (wait_next);
-    DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Next of %d (%llu) is unlocked\n",
-                   MODNAME, current->pid, offset, data_block->metadata.next); }
-
-    /* Proceed with the invalidation without conflicts */
-    fail = invalidate_block(offset, data_block, bh);
-    if (fail < 0) goto failure_2;
+    /* If 'offset' is 'first' then change 'first' to 'next'*/
+    if (__sync_bool_compare_and_swap(&info->first, offset, data_block->metadata.next)) {
+        fail = invalidate_first_block(offset, data_block, bh);
+        if (fail < 0) goto failure_2;
+    } else if (__sync_bool_compare_and_swap(&info->last, offset, data_block->metadata.prev)) {
+        fail = invalidate_last_block(offset, data_block, bh);
+        if (fail < 0) goto failure_2;
+    } else {
+        fail = invalidate_middle_block(offset, data_block, bh);
+        if (fail < 0) goto failure_2;
+    }
 
     /* Finalize the invalidation: set invalid block as free to write on and release the bit in INV_MAP */
     clear_bit(offset, info->free_blocks);
@@ -318,7 +279,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         clear_bit(offset, info->inv_map);
     failure_1:
         __sync_fetch_and_sub(&info->count, 1);
-        AUDIT { printk(KERN_INFO "%s: [invalidate_data()- %d] Invalidation of block %d failed with error %d.\n",
+        AUDIT { printk(KERN_INFO "%s: [invalidate_data() - %d] Invalidation of block %d failed with error %d.\n",
                        MODNAME, current->pid, offset, fail); }
         return fail;
 }
