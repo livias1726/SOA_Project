@@ -1,60 +1,67 @@
 #include "user.h"
 
-void check_error(){
-    switch(errno){
-        case ENODEV:
-            printf("Device not mounted.\n");
-            break;
-        case EINVAL:
-            printf("Input parameters are invalid.\n");
-            break;
-        case ENOMEM:
-            printf("Unavailable memory on device.\n");
-            break;
-        case EIO:
-            printf("Couldn't read device block.\n");
-            break;
-        case ENODATA:
-            printf("Unavailable data.\n");
-            break;
-    }
-}
+char* msgs[] = {LOREM, EMERALD, LUCIFER};
+int sizes[] = {SIZE_LOREM, SIZE_EMERALD, SIZE_LUCIFER};
 
-void test_put_data(int sysno){
-    int ret, size;
+void test_put_data(){
+    int ret, size, idx;
     char *msg;
 
-    size = strlen(example_txt);
-    msg = malloc(size+1);
-    memcpy(msg, example_txt, size);
-    size = strlen(msg);
+    printf("Choose a message:\n"
+           "\t[1] Example text\n"
+           "\t[2] Emerald tablet\n"
+           "\t[3] Dante's Lucifer\n"
+           "\t[other] Custom\n");
+    idx = getint();
+
+    switch(idx){
+        case 1:
+        case 2:
+        case 3:
+            size = sizes[--idx];
+            msg = malloc(size);
+            if (!msg) {
+                printf("malloc failed\n");
+                exit(EXIT_FAILURE);
+            }
+            memcpy(msg, msgs[idx], size);
+            memcpy(msg + size, "\0", 1);
+            break;
+        default:
+            printf("Insert a message: ");
+            scanf("%s", msg); // fixme: segfault
+            size = strlen(msg);
+    }
 
     printf("Test parameters:\n\tsource = \"%s\"\n\tsize = %d\n", msg, size);
-    ret = syscall(sysno, msg, size);
+    ret = syscall(put, msg, size);
     if(ret < 0) {
-        check_error();
+        check_error(0, "PUT");
     } else {
         printf("Message correctly written in block %d\n", ret);
     }
+
+    free(msg);
 }
 
-void test_get_data(int sysno) {
+void test_get_data() {
     int ret, size, block;
     char* msg;
 
-    printf("Insert parameters:\n - Block index: ");
-    scanf("%d", &block);
-    printf(" - Size to read (in bytes): ");
-    scanf("%d", &size);
+    printf("Which block do you want to read (indexes starts from 2)? ");
+    block = getint();
+    printf("How many bytes do you want to read? ");
+    size = getint();
 
     msg = malloc(size);
     if (!msg) {
         perror("malloc failed.");
         return;
     }
-    ret = syscall(sysno, block, msg, size);
+
+    ret = syscall(get, block, msg, size);
     if(ret < 0) {
-        check_error();
+        check_error(0, "GET");
     } else {
         printf("Retrieved %d bytes: \"%s\"\n", ret, msg);
     }
@@ -62,71 +69,44 @@ void test_get_data(int sysno) {
     free(msg);
 }
 
-void test_invalidate_data(int sysno){
+void test_invalidate_data(){
     int ret, block;
 
-    printf("Insert parameters:\n - Block index: ");
-    scanf("%d", &block);
+    printf("Which block do you want to invalidate (indexes starts from 2)? ");
+    block = getint();
 
-    ret = syscall(sysno, block);
+    ret = syscall(inv, block);
     if(ret < 0) {
-        check_error();
+        check_error(0, "INV");
     } else {
         printf("Block %d invalidated.\n", block);
     }
 }
 
-int check_input(int argc, char *argv[], int *put, int *get, int *inv){
-    if (argc < 4) {
-        printf("Usage: ./user <PUT code> <GET code> <INVALIDATE code>");
-        return -1;
-    }
-
-    int ret;
-
-    *put = atoi(argv[1]);
-    *get = atoi(argv[2]);
-    *inv = atoi(argv[3]);
-
-    // test for syscalls existence with invalid params to return a known error
-    ret = syscall(*put, NULL, -1);
-    if(ret == -1 && errno == ENOSYS) printf("Test to PUT returned with error. System call not installed.\n");
-
-    ret = syscall(*get, -1, NULL, -1);
-    if(ret == -1 && errno == ENOSYS) printf("Test to GET returned with error. System call not installed.\n");
-/*
-    ret = syscall(*inv, -1);
-    perror("inv\n");
-    //if(ret == -1 && errno == ENOSYS) printf("Test to INVALIDATE returned with error. System call not installed.\n");
-*/
-    return 0;
-}
-
 int main(int argc, char *argv[]){
 
-    int put, get, inv;
-    if (check_input(argc, argv, &put, &get, &inv)) return -1;
-
-    char c;
     int i;
-    printf("Choose an operation:\n"
-           "\t[1] Put data\n"
-           "\t[2] Get data\n"
-           "\t[3] Invalidate data\n"
-           "\t[other] Exit\n");
+
+    if (check_input(argc, argv)) return -1;
 
     while(1) {
-        c = getc(stdin);
-        i = atoi(&c);
+
+        printf("Choose an operation:\n"
+               "\t[1] Put data\n"
+               "\t[2] Get data\n"
+               "\t[3] Invalidate data\n"
+               "\t[other] Exit\n");
+        i = getint();
+
         switch(i){
             case 1:
-                test_put_data(put);
+                test_put_data();
                 break;
             case 2:
-                test_get_data(get);
+                test_get_data();
                 break;
             case 3:
-                test_invalidate_data(inv);
+                test_invalidate_data();
                 break;
             default:
                 return 0;

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "include/aos_fs.h"
+#include "../include/aos_fs.h"
 
 int print_superblock(int fd, int *d_blocks){
     ssize_t ret;
@@ -65,11 +65,14 @@ int print_data_blocks(int fd, int nblocks){
     for (i = 0; i < nblocks; ++i) {
         ret = read(fd, (char*)&aos_block, sizeof(aos_block));
         if (ret != AOS_BLOCK_SIZE){
-            printf("Data block [%d]: read [%d] bytes.\n", (int)ret, i);
+            printf("Data block [%d]: read [%d] bytes.\n", (int)ret, i+2);
             return -1;
         }
-        printf("Data block [%d]: \n", i);
-        printf("\tis valid: %u\n", aos_block.metadata.is_valid);
+        printf("Data block [%d]: \n", i+2);
+        printf("\tis valid: %lu\n", aos_block.metadata.is_valid);
+        printf("\tprev: %lu\n", aos_block.metadata.prev);
+        printf("\tnext: %lu\n", aos_block.metadata.next);
+        printf("\tcounter: %lu\n", aos_block.metadata.counter);
     }
 
     return 0;

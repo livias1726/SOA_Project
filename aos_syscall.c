@@ -8,7 +8,8 @@
 #include "lib/include/scth.h"
 
 #include "include/config.h"
-#include "fs/include/aos_fs.h"
+#include "include/aos_fs.h"
+#include "include/utils.h"
 
 unsigned long the_syscall_table = 0x0;
 module_param(the_syscall_table, ulong, 0660);
@@ -32,71 +33,85 @@ __SYSCALL_DEFINEx(2, _put_data, char *, source, size_t, size){
 #else
 asmlinkage int sys_put_data(char * source, size_t size){
 #endif
-    struct buffer_head *bh;
-    uint64_t* free_map;
-    uint64_t nblocks;
-    int i, j, block_index = -1;
-    char * msg;
-    size_t ret;
+    struct aos_super_block aos_sb;
+    int nblocks, avb_size, fail, old_first, first_put;
+    uint64_t block_index, old_last;
 
-    // check if device is mounted
+    /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
 
-    // check legal size
-    if (size >= sizeof(struct aos_data_block)) return -EINVAL;
+    /* Signal device usage */
+    __sync_fetch_and_add(&info->count, 1);
 
-    // find a free block
-    free_map = info->free_blocks;
-    nblocks = info->sb.partition_size;
-
-    for (i = 0; i < nblocks; i+=64) { // scan 64 bit at a time
-        if ((*free_map & FULL_MAP_ENTRY) == FULL_MAP_ENTRY) {
-            free_map++;
-            continue;
-        }
-
-        // found bit block with a bit unset
-        for (j = 0; j < 64; ++j) {
-            if (!(TEST_BIT(free_map, j))) {
-                block_index = i + j;
-                break;
-            }
-        }
-        break;
-    }
-    if(block_index == -1) return -ENOMEM;
-
-    SET_BIT(info->free_blocks, block_index);
-
-    // alloc area to retrieve message from user
-    msg = kzalloc(size, GFP_KERNEL);
-    if (!msg) return -ENOMEM;
-    // retrieve message from user
-    ret = copy_from_user(msg, source, size);
-    size -= ret;
-    msg[size+1] = '\0';
-
-    // get data block in page cache buffer
-    bh = sb_bread(info->vfs_sb, block_index);
-    if(!bh) {
-        kfree(msg);
-        return -EIO;
+    /* Check input parameter */
+    aos_sb = info->sb;
+    avb_size = aos_sb.data_block_size;
+    if (size+1 >= avb_size) {
+        fail = -EINVAL;
+        goto failure_1;
     }
 
-    // write data on the free block
-    memcpy(bh->b_data, msg, size);
-    mark_buffer_dirty(bh);
-#ifdef WB
-    AUDIT { printk(KERN_INFO "%s: [put_data()] forcing synchronization on page cache\n", MODNAME); }
-    sync_dirty_buffer(bh); // immediate synchronous write on the device
-#endif
-    brelse(bh);
-    kfree(msg);
+    /* Read bitmap to find a free block */
+    nblocks = aos_sb.partition_size;
+    do {
+        block_index = find_first_zero_bit(info->free_blocks, nblocks);
+        if(block_index == nblocks) { // no free block was found
+            fail = -ENOMEM;
+            goto failure_1;
+        }
+    /* ATOMICALLY test and set the bit of the free block: if a concurrent PUT retrieved the same block index, only
+     * the first one to set the bit will be able to use it. The other one will try to find a new free block */
+    } while (test_and_set_bit(block_index, info->free_blocks));
 
-    AUDIT { printk(KERN_INFO "%s: [put_data()] system call was successful - written %lu bytes in block %d\n",
-                   MODNAME, size, block_index); }
+    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Started on block %llu\n", MODNAME, current->pid, block_index); }
 
+    /* Signal a pending PUT on selected block.
+     * This cannot cause conflicts with other PUT operations thanks to the above loop.*/
+    set_bit(block_index, info->put_map);
+
+    /* Signal a pending PUT for possible INVALIDATION conflicts. 'first_put' will be 0 if this thread is the first
+     * to execute the PUT in a concurrent execution */
+    first_put = test_and_set_bit(PUT_BIT, &info->inv_put_lock);
+
+    /* Wait for the completion of an eventual INVALIDATION on 'last':
+     * that's the only conflict that can happen between INV and PUT. */
+    wait_on_bit(info->inv_map, info->last, TASK_INTERRUPTIBLE);
+
+    /* ATOMICALLY update the last block to be written via 'last' variable.
+     * The order in which this operation is performed is what will order concurrent PUT: the first to update
+     * this value will be the first to write a new block chronologically (change metadata in the previous block['last'])
+     * and update new block metadata accordingly.
+     * */
+    old_last = __atomic_exchange_n(&info->last, block_index, __ATOMIC_SEQ_CST);
+
+    DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'last' from %llu to %llu. \n",
+                   MODNAME, current->pid, old_last, block_index); }
+
+    old_first = -1;
+    fail = put_new_block(block_index, source, size, old_last, &old_first);
+    if (fail < 0) goto failure_2;
+
+    /* Signal completion of PUT operation on given block */
+    clear_bit(block_index, info->put_map);
+    if(!first_put) clear_bit(PUT_BIT, &info->inv_put_lock);
+
+    /* Release resources */
+    __sync_fetch_and_sub(&info->count, 1);
+    AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put %d bytes in block %llu\n", MODNAME, current->pid, fail, block_index); }
     return block_index;
+
+    failure_2:
+        __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first' if it was changed
+        __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' if no thread has changed it yet
+
+        if(!first_put) clear_bit(PUT_BIT, &info->inv_put_lock);
+
+        clear_bit(block_index, info->put_map);
+        clear_bit(block_index, info->free_blocks);
+    failure_1:
+        __sync_fetch_and_sub(&info->count, 1);
+        AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put failed on error %d\n", MODNAME, current->pid, fail); }
+        return fail;
 }
 
 /**
@@ -109,110 +124,164 @@ __SYSCALL_DEFINEx(3, _get_data, uint64_t, offset, char *, destination, size_t, s
 #else
 asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 #endif
-
-    /* warning:
-     *      this operation is performed by a reader on a given data block:
-     *      need to acquire a reader lock on the block data to avoid conflicts if another thread concurrently tries
-     *      to invalidate data.
-     * */
-
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int loaded_bytes, len;
+    int loaded_bytes, len, fail;
+    unsigned int seq;
     char * msg;
     size_t ret;
 
-    // check if device is mounted
+    /* Check if device is mounted */
     if (!info->is_mounted) return -ENODEV;
 
-    // check parameters
+    /* Signal device usage */
+    __sync_fetch_and_add(&info->count, 1);
+
+    /* Check input parameters */
     aos_sb = info->sb;
-    if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.block_size) return -EINVAL;
-
-    // todo: signal the presence of a reader on the block
-
-    // get data block in page cache buffer
-    bh = sb_bread(info->vfs_sb, offset);
-    if(!bh) {
-        // todo: release reader lock
-        return -EIO;
+    if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.data_block_size) {
+        fail = -EINVAL;
+        goto failure;
     }
-    memcpy(&data_block, bh->b_data, sizeof(struct aos_data_block));
-    brelse(bh);
 
-    // check data validity
+    /* Read given block */
+    do {
+        seq = read_seqbegin(&info->block_locks[offset]);
+        bh = sb_bread(info->vfs_sb, offset);
+        if(!bh) {
+            fail = -EIO;
+            goto failure;
+        }
+        // copy the data in another memory location to release the buffer head
+        memcpy(&data_block, bh->b_data, aos_sb.block_size);
+        brelse(bh);
+    } while (read_seqretry(&info->block_locks[offset], seq));
+
+    /* Check data validity: test with bit operations on free map is not atomic. This implementation ensure that
+     * data block remains the same after a read was successful according to the seqlock */
     if (!data_block.metadata.is_valid) {
-        // todo: release reader lock
-        return -ENODATA;
+        fail = -ENODATA;
+        goto failure;
     }
 
     msg = data_block.data.msg;
+
+    /* Check message length */
     len = strlen(msg);
-    if (len == 0) {
-        // todo: release reader lock
-        return 0; // no available data
+    if (len == 0) { // no available data
+        fail = 0;
+        goto failure;
     } else if (len < size) {
         size = len;
     }
 
-    // try to read 'size' bytes of data starting from 'offset' into 'destination'
+    /* Try to read 'size' bytes of data starting from 'offset' into 'destination' */
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
 
-    // todo: release reader lock
+    __sync_fetch_and_sub(&info->count, 1);
+    AUDIT { printk(KERN_INFO "%s: [get_data()] successful - read %d bytes in block %llu\n", MODNAME, loaded_bytes, offset); }
     return loaded_bytes;
+
+    failure:
+        AUDIT { printk(KERN_INFO "%s: [get_data()] on block %llu failed with error %d\n", MODNAME, offset, fail); }
+        __sync_fetch_and_sub(&info->count, 1);
+        return fail;
 }
 
 /**
- * Invalidate data in a block at a given offset. Data should logically disappear from the device
+ * Invalidate data in a block at a given offset. Data should logically disappear from the device.
  * @return ENODATA error if no data is currently valid and associated with the offset parameter
  * */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
-__SYSCALL_DEFINEx(1, _invalidate_data, uint64_t, offset){
+__SYSCALL_DEFINEx(1, _invalidate_data, uint32_t, offset){
 #else
-asmlinkage int sys_invalidate_data(uint64_t offset){
+asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
-
-    aos_fs_info_t *aos_info;
-    struct super_block *sb;
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int fail;
+    unsigned int seq;
+    int fail, nblocks;
 
-    aos_info = info;
-    // check if device is mounted
-    if (!aos_info->is_mounted) {
-        fail = -ENODEV;
-        goto inv_failure;
-    }
-    // check legal operation
-    if (offset < 2 || offset > aos_info->sb.partition_size) {
+    /* Check if device is mounted */
+    if (!info->is_mounted) return -ENODEV;
+
+    /* Signal device usage */
+    __sync_fetch_and_add(&info->count, 1);
+
+    /* Check input parameters */
+    nblocks = info->sb.partition_size;
+    if (offset < 2 || offset >= nblocks) {
         fail = -EINVAL;
-        goto inv_failure;
+        goto failure_1;
     }
 
-    // get data block in page cache buffer
-    sb = aos_info->vfs_sb;
-    bh = sb_bread(sb, offset);
-    if(!bh) {
-        fail = -EIO;
-        goto inv_failure;
+    DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Started on block %d\n", MODNAME, current->pid, offset); }
+
+    /* Signal a pending INV on selected block. Test and set is used to atomically detect concurrent invalidations
+     * on the same block and stop them all except for the first to set the flag. */
+    if (test_and_set_bit(offset, info->inv_map)) {
+        fail = -ENODATA;
+        goto failure_1;
     }
-    data_block = (struct aos_data_block*)bh->b_data;
 
-    if (!data_block->metadata.is_valid) return -ENODATA; // no valid data
+    /* Check current pending PUT on the same block: if a PUT is pending on the block it means that the block
+     * has currently no valid data associated yet. This falls into the case of ENODATA error. */
+    if (test_bit(offset, info->put_map) || !test_bit(offset, info->free_blocks)) {
+        fail = -ENODATA;
+        goto failure_2;
+    }
 
-    // invalidate data
-    data_block->metadata.is_valid = 0;
+    /* If the invalidation operates on 'last' block, it must wait for the PUT that is eventually
+     * currently operating on last. This is the PUT that firstly set the specific bit in 'inv_put_lock'.
+     * TODO: This assumes that the PUT that sets this bit is also the PUT that will perform its operations on 'last'. */
+    if (offset == info->last) {
+        wait_on_bit(&info->inv_put_lock, PUT_BIT, TASK_INTERRUPTIBLE);
+        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Invalidation on last (%d) - Wait successful.\n",
+                       MODNAME, current->pid, offset); }
+    }
 
-    // set invalid block as free
-    CLEAR_BIT(aos_info->free_blocks, offset);
+    /* Read a block until no concurrent write is detected */
+    do {
+        seq = read_seqbegin(&info->block_locks[offset]);
+        bh = sb_bread(info->vfs_sb, offset);
+        if(!bh) {
+            fail = -EIO;
+            goto failure_2;
+        }
+        data_block = (struct aos_data_block*)bh->b_data;
+    } while (read_seqretry(&info->block_locks[offset], seq));
 
+    /* If 'offset' is 'first' then change 'first' to 'next'*/
+    if (__sync_bool_compare_and_swap(&info->first, offset, data_block->metadata.next)) {
+        fail = invalidate_first_block(offset, data_block, bh);
+        if (fail < 0) goto failure_2;
+    } else if (__sync_bool_compare_and_swap(&info->last, offset, data_block->metadata.prev)) {
+        fail = invalidate_last_block(offset, data_block, bh);
+        if (fail < 0) goto failure_2;
+    } else {
+        fail = invalidate_middle_block(offset, data_block, bh);
+        if (fail < 0) goto failure_2;
+    }
+
+    /* Finalize the invalidation: set invalid block as free to write on and release the bit in INV_MAP */
+    clear_bit(offset, info->free_blocks);
+    clear_bit(offset, info->inv_map);
+
+    /* Release resources */
+    __sync_fetch_and_sub(&info->count, 1);
+    AUDIT { printk(KERN_INFO "%s: [invalidate_data() - %d] Invalidated block %d\n", MODNAME, current->pid, offset); }
     return 0;
 
-inv_failure:
-    return fail;
+    /* Failures behaviour */
+    failure_2:
+        clear_bit(offset, info->inv_map);
+    failure_1:
+        __sync_fetch_and_sub(&info->count, 1);
+        AUDIT { printk(KERN_INFO "%s: [invalidate_data() - %d] Invalidation of block %d failed with error %d.\n",
+                       MODNAME, current->pid, offset, fail); }
+        return fail;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)

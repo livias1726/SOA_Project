@@ -6,7 +6,7 @@
 #include <linux/types.h>
 #include <linux/string.h>
 
-#include "include/aos_fs.h"
+#include "../include/aos_fs.h"
 
 /**
  * The device driver should support file system operations allowing the access to the currently saved data:
@@ -23,14 +23,11 @@ extern aos_fs_info_t *info;
  * */
 int aos_open(struct inode *inode, struct file *filp){
 
-    // check if the FS is mounted
-    if (!info->is_mounted) {
-        printk(KERN_WARNING "%s: [aos_open()] operation failed - fs not mounted.\n", MODNAME);
-        return -ENODEV;
-    }
+    /* Check if device is mounted */
+    if (!info->is_mounted) return -ENODEV;
 
-    // atomic add to usage counter
-    __sync_fetch_and_add(&(info->count),1);
+    /* Signal device usage */
+    __sync_fetch_and_add(&info->count, 1);
 
     printk(KERN_INFO "%s: device file successfully opened by thread %d\n", MODNAME, current->pid);
 
@@ -42,70 +39,123 @@ int aos_open(struct inode *inode, struct file *filp){
  * */
 int aos_release(struct inode *inode, struct file *filp){
 
-    // check if the FS is mounted
-    if (!info->is_mounted) {
-        printk(KERN_WARNING "%s: [aos_release()] operation failed - fs not mounted.\n", MODNAME);
-        return -ENODEV;
-    }
+    filp->f_pos = 0;
+    // todo: invalidate further usage of device descriptor
 
     // atomic sub to usage counter
     __sync_fetch_and_sub(&(info->count),1);
-
     printk(KERN_INFO "%s: device file closed by thread %d\n",MODNAME, current->pid);
 
     return 0;
 }
 
 /*
- * Reads count bytes from a file starting at position *f_pos; the value *f_pos (which usually corresponds to
- * the file pointer) is then increased. To deliver the content chronologically, the file pointer should be
- * updated to always point at the start of the oldest valid data.
- *
- * A read operation should only return data related to messages not invalidated before the access in read mode to
- * the corresponding block of the device in an I/O session.
+ * Reads 'count' bytes from the device starting from the oldest message; the value *f_pos (which usually corresponds to
+ * the file pointer) is ignored.
+ * todo The content must be delivered chronologically and the operation should only return data related to messages
+ *  not invalidated before the access in read mode to the corresponding block of the device in an I/O session.
  * */
 ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 
-    struct buffer_head *bh = NULL;
-    struct inode *the_inode = filp->f_inode;
-    uint64_t file_size = the_inode->i_size;
-    int ret;
-    loff_t offset;
-    int block_to_read;  //index of the block to be read from device
+    struct buffer_head *bh;
+    struct aos_super_block aos_sb;
+    struct aos_data_block data_block;
+    int len, ret, nblocks, data_block_size, bytes_read, last_block;
+    bool is_last;
+    unsigned int seq;
+    char *msg, *block_msg;
+    loff_t b_idx, offset;
 
-    if(!info->is_mounted) {
-        printk(KERN_WARNING "%s: [aos_read()] operation failed - fs not mounted.\n", MODNAME);
-        return -ENODEV;
-    }
+    /* Check parameter validity */
+    if (!count) return 0;
+    if (!buf) return -EINVAL;
 
-    printk(KERN_INFO "%s: read operation called with len %ld and offset %lld (the current file size is %lld)",
-           MODNAME, count, *f_pos, file_size);
+    /* Allocate memory */
+    msg = kzalloc(count, GFP_KERNEL);
+    if(!msg) return -ENOMEM;
 
-    // check boundaries
-    if (*f_pos >= file_size) {
-        return 0;   // specified offset is over file size
-    }else if (*f_pos + count > file_size) {
-        count = file_size - *f_pos; // number of bytes requested are over file size: trim count
-    }
+    /* Retrieve device info */
+    aos_sb = info->sb;
+    nblocks = aos_sb.partition_size;
+    data_block_size = aos_sb.data_block_size;
 
-    // determine the block level offset for the operation
-    offset = *f_pos % AOS_BLOCK_SIZE;
-    // just read stuff in a single block - residuals will be managed at the application level
-    if (offset + count > AOS_BLOCK_SIZE) count = AOS_BLOCK_SIZE - offset;
+    /* Parse file pointer */
+    b_idx = (*f_pos >> 32) % nblocks;   // retrieve last block accessed by the current thread (high 32 bits)
+    if (!b_idx) b_idx = info->first; // todo: maybe need to be atomic
+    offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread in the block (low 32 bits)
+    last_block = info->last;
 
-    // compute the actual index of the block to be read from device
-    block_to_read = (*f_pos / AOS_BLOCK_SIZE) + 2; //the value 2 accounts for superblock and file-inode on device
+    printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
+           MODNAME, current->pid, b_idx, offset);
 
-    printk(KERN_INFO "%s: read operation must access block %d of the device", MODNAME, block_to_read);
+    bytes_read = 0;
+    do {
+        is_last = (b_idx == last_block);
 
-    bh = (struct buffer_head *)sb_bread(filp->f_path.dentry->d_inode->i_sb, block_to_read);
-    if(!bh) return -EIO;
+        /* Read data block into a local variable */
+        do {
+            seq = read_seqbegin(&info->block_locks[b_idx]);
+            bh = sb_bread(info->vfs_sb, b_idx);
+            if(!bh) {
+                kfree(msg);
+                return -EIO;
+            }
+            memcpy(&data_block, bh->b_data, data_block_size);
+            brelse(bh);
+        } while (read_seqretry(&info->block_locks[b_idx], seq));
 
-    ret = copy_to_user(buf,bh->b_data + offset, count);
-    *f_pos += (count - ret);
-    brelse(bh);
+        /* Check data validity: invalidation could happen while reading the block.
+         * This ensures that a writing on the block is always detected, even if the read is already executing. */
+        if (!data_block.metadata.is_valid) {
+            b_idx = data_block.metadata.next;
+            continue;
+        }
 
-    return count - ret;
+        /* Use the file pointer offset to start reading from given position in the file */
+        if (offset) {
+            block_msg = (data_block.data.msg) + offset; // shift the message according to the file pointer
+        } else {
+            block_msg = (data_block.data.msg); // if offset is zero, read the whole message
+        }
+
+        len = strlen(block_msg);
+
+        /* Check data availability */
+        if (len == 0) {
+            offset = 0; // reset intra-block offset
+            b_idx = data_block.metadata.next;
+            continue;
+        }
+
+        AUDIT { printk(KERN_DEBUG "%s: read operation accessed block %lld of the device\n", MODNAME, b_idx); }
+
+        if ((bytes_read + len) > count) { // last block to read
+            len = count - bytes_read;
+            if (len > 0) {
+                memcpy(msg + bytes_read, block_msg, len);
+                bytes_read += len;
+                offset += len;
+            }
+        } else {
+            memcpy(msg + bytes_read, block_msg, len);
+            bytes_read += len;
+            memcpy(msg + bytes_read, "\n", 1);
+            bytes_read += 1;
+
+            offset = 0;
+        }
+
+        b_idx = data_block.metadata.next;
+    } while((bytes_read < count) && (!is_last));
+
+    // set high 32 bits of f_pos to the current index i and low 32 bits of f_pos to the new offset count
+    *f_pos = (b_idx << 32) | offset;
+    ret = (bytes_read > 0) ? copy_to_user(buf, msg, bytes_read) : 0;
+    kfree(msg);
+
+    AUDIT { printk(KERN_INFO "%s: read operation by thread %d completed\n", MODNAME, current->pid); }
+
+    return (bytes_read - ret);
 }
 
 /*

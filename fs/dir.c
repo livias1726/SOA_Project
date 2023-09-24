@@ -4,7 +4,7 @@
 #include <linux/buffer_head.h>
 #include <linux/slab.h>
 
-#include "include/aos_fs.h"
+#include "../include/aos_fs.h"
 
 /*
  * This function iterates through the entries in a directory. It is called by the readdir() system call.

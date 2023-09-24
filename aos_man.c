@@ -10,7 +10,7 @@
 #include <linux/string.h>
 
 #include "include/config.h"
-#include "fs/include/aos_fs.h"
+#include "include/aos_fs.h"
 
 static int __init init_driver(void)
 {

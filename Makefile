@@ -6,7 +6,7 @@ FSDIR := ./fs
 PWD := $(shell pwd)
 
 obj-m := aos.o
-aos-objs := aos_man.o aos_syscall.o lib/scth.o fs/aos_fs.o fs/file.o fs/dir.o
+aos-objs := aos_man.o aos_syscall.o lib/scth.o fs/aos_fs.o fs/file.o fs/dir.o utils/utils.o
 
 all:
 	for n in $(SUBDIRS); do $(MAKE) -C $$n || exit 1; done
