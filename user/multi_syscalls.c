@@ -45,7 +45,11 @@ retry:
     ret = syscall(inv, block);
     if(ret < 0) {
         check_error(tid, "INV");
-        if (ret == -EAGAIN) goto retry;
+        if (errno == EAGAIN) {
+            printf("[%d] - INV on %d RETRY\n", tid, block);
+            sleep(1);
+            goto retry;
+        }
 
         pthread_exit((void*)-1);
     } else {

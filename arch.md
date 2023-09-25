@@ -57,19 +57,8 @@ Since each inode can have only one data block:
 
 Readers never block a writer, but they must retry if a writer is in progress by detecting change in the sequence number.
 
-### Reader/Writer locks ###
+### Atomic operations and bit flags ###
 
-rwlock_t is a multiple readers and single writer lock mechanism.
-
-* Non-PREEMPT_RT kernels implement rwlock_t as a spinning lock and the suffix rules of spinlock_t apply accordingly. 
-The implementation is fair, thus preventing writer starvation.
-
-* PREEMPT_RT kernels map rwlock_t to a separate rt_mutex-based implementation, thus changing semantics:
-  * All the spinlock_t changes also apply to rwlock_t. 
-  * Because an rwlock_t writer cannot grant its priority to multiple readers, a preempted low-priority reader will 
-  continue holding its lock, thus starving even high-priority writers. In contrast, because readers can grant their 
-  priority to a writer, a preempted low-priority writer will have its priority boosted until it releases the lock, 
-  thus preventing that writer from starving readers.
 
 # System Calls #
 
@@ -119,3 +108,33 @@ The implementation is fair, thus preventing writer starvation.
 * Raise a new writing on buffer head to be written back in memory.
 * Release the resources (buffer head, data block, presence counter).
 * Return the used block index.
+
+
+# CHRONOLOGICAL READ
+
+Using metadata: each block maintains a reference to its predecessor (to update 'last' when the last block of the
+chronological chain is invalidated) and successor (to read chronologically)
+
+## PUT DATA
+1. Check device and params.
+2. Test_and_Set the first free block. If no free blocks, return. -> No PUT on the same block.
+3. Set PUT usage on blk_idx. If last is used by INV, then wait -> No INV conflicts
+4. CAS on last and retrieve old_last. -> No conflicts on last for concurrent PUT.
+5. Write new block (msg, is_valid, prev).
+6. If old_val = 1, then change first = blk_idx.
+7. Else, write preceding block (next).
+8. Clear PUT usage on blk_idx.
+
+## INVALIDATE DATA
+1. Check device and params.
+2. Test_and_Set INV usage on blk_idx -> if found set, then another INV on the same block is already pending.
+   -> No INV on the same block.
+3. If blk_idx is used by PUT, return. If blk_idx.prev is used by PUT, wait -> No PUT conflict.
+4. Test_and_clear blk_idx on free block. If already cleared, return -> No INV on the same block. (REDUNDANT)
+5. If blk_idx.prev and blk_idx.next are used by INV, wait -> No conflicts on concurrent INV.
+6. Invalidate new block (is_valid).
+7. If blk_idx = first AND blk_idx = last, CAS on last = 1 and return.
+8. If blk_idx = first, CAS on first = blk_idx.next and return.
+9. If blk_idx = last, CAS on last = blk_idx.prev and return.
+10. Write preceding block (next = blk_idx.next) and successive block (prev = blk_idx.prev)
+11. Clear blk_idx bit in INV_MASK.
