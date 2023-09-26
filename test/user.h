@@ -33,9 +33,20 @@ int inv;
 int check_input(int argc, char **argv);
 int getint();
 void check_error(int tid, char* call);
-void* test_put_data(void *arg);
-void* test_get_data(void *arg);
-void* test_invalidate_data(void *arg);
+
+// single thread
+void test_put_data();
+void test_get_data();
+void test_invalidate_data();
+
+// multi thread
+void* multi_put_data(void *arg);
+void* multi_get_data(void *arg);
+void* multi_invalidate_data(void *arg);
+
+// device
+void orc();
+void orc_fp();
 void* multi_orc();
 
 #endif //SOA_PROJECT_USER_H

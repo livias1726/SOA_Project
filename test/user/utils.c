@@ -1,4 +1,4 @@
-#include "user.h"
+#include "../user.h"
 
 int getint(){
     int i = 0;
@@ -21,7 +21,7 @@ int check_input(int argc, char *argv[]){
     int ret;
 
     if (argc < 4) {
-        printf("Usage: ./user <PUT code> <GET code> <INVALIDATE code>");
+        printf("Usage: <exe> <PUT code> <GET code> <INVALIDATE code>");
         return -1;
     }
 

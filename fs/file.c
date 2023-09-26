@@ -68,6 +68,9 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     char *msg, *block_msg;
     loff_t b_idx, offset;
 
+    /* Check device state validity */
+    if (!info->first) return 0;
+
     /* Check parameter validity */
     if (!count) return 0;
     if (!buf) return -EINVAL;
@@ -82,16 +85,22 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     data_block_size = aos_sb.data_block_size;
 
     /* Parse file pointer */
-    b_idx = (*f_pos >> 32) % nblocks;   // retrieve last block accessed by the current thread (high 32 bits)
-    if (!b_idx) b_idx = info->first;
-    offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread in the block (low 32 bits)
+    if (*f_pos == 0) {
+        b_idx = info->first;
+        offset = 0;
+    } else {
+        b_idx = (*f_pos >> 32) % nblocks;   // retrieve last block accessed by the current thread (high 32 bits)
+        offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread (low 32 bits)
+    }
+
     last_block = info->last;
 
     printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
            MODNAME, current->pid, b_idx, offset);
 
     bytes_read = 0;
-    do {
+    is_last = false;
+    while((bytes_read < count) && (!is_last)){
         is_last = (b_idx == last_block);
 
         /* Read data block into a local variable */
@@ -109,22 +118,24 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         /* Check data validity: invalidation could happen while reading the block.
          * This ensures that a writing on the block is always detected, even if the read is already executing. */
         if (!data_block.metadata.is_valid) {
+            /* warning: if invalidate zeroes out the prev and next metadata and an invalidation performs while
+             *  reading, the chain will break, as the algorithm */
             b_idx = data_block.metadata.next;
             continue;
         }
 
         /* Use the file pointer offset to start reading from given position in the file */
         if (offset) {
-            block_msg = (data_block.data.msg) + offset; // shift the message according to the file pointer
+            block_msg = data_block.data.msg + offset;
+            offset = 0; // reset intra-block offset
         } else {
-            block_msg = (data_block.data.msg); // if offset is zero, read the whole message
+            block_msg = data_block.data.msg;
         }
 
         len = strlen(block_msg);
 
         /* Check data availability */
-        if (len == 0) {
-            offset = 0; // reset intra-block offset
+        if (!len) {
             b_idx = data_block.metadata.next;
             continue;
         }
@@ -133,22 +144,20 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 
         if ((bytes_read + len) > count) { // last block to read
             len = count - bytes_read;
-            if (len > 0) {
-                memcpy(msg + bytes_read, block_msg, len);
-                bytes_read += len;
-                offset += len;
-            }
-        } else {
             memcpy(msg + bytes_read, block_msg, len);
             bytes_read += len;
-            memcpy(msg + bytes_read, "\n", 1);
-            bytes_read += 1;
+            offset += len;
 
-            offset = 0;
+            break;
         }
 
+        memcpy(msg + bytes_read, block_msg, len);
+        bytes_read += len;
+        memcpy(msg + bytes_read, "\n", 1);
+        bytes_read += 1;
+
         b_idx = data_block.metadata.next;
-    } while((bytes_read < count) && (!is_last));
+    }
 
     // set high 32 bits of f_pos to the current index i and low 32 bits of f_pos to the new offset count
     *f_pos = (b_idx << 32) | offset;

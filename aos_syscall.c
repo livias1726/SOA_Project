@@ -23,7 +23,7 @@ int restore[HACKED_ENTRIES] = {[0 ... (HACKED_ENTRIES-1)] -1};
 extern aos_fs_info_t *info;
 
 /**
- * Put into one free block of the block-device 'size' bytes of the user-space data identified by the 'source' pointer.
+ * Put into one free block of the block-device 'size' bytes of the test-space data identified by the 'source' pointer.
  * This operation must be executed all or nothing.
  * @return offset of the device (the block index) where data have been put;
  *         ENOMEM, if there is currently no room available on the device.

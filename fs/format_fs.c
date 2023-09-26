@@ -8,7 +8,7 @@
 #include "../include/aos_fs.h"
 
 /*
- * This user-level software will write the following information onto the disk
+ * This test-level software will write the following information onto the disk
  * - BLOCK 0, super block;
  * - BLOCK 1, inodes block (the inode for root is volatile);
  * - BLOCK 2, ... , nblocks+2, data blocks of the device

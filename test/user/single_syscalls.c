@@ -1,4 +1,4 @@
-#include "user.h"
+#include "../user.h"
 
 char* msgs[] = {LOREM, EMERALD, LUCIFER};
 int sizes[] = {SIZE_LOREM, SIZE_EMERALD, SIZE_LUCIFER};
@@ -80,36 +80,5 @@ void test_invalidate_data(){
         check_error(0, "INV");
     } else {
         printf("Block %d invalidated.\n", block);
-    }
-}
-
-int main(int argc, char *argv[]){
-
-    int i;
-
-    if (check_input(argc, argv)) return -1;
-
-    while(1) {
-
-        printf("Choose an operation:\n"
-               "\t[1] Put data\n"
-               "\t[2] Get data\n"
-               "\t[3] Invalidate data\n"
-               "\t[other] Exit\n");
-        i = getint();
-
-        switch(i){
-            case 1:
-                test_put_data();
-                break;
-            case 2:
-                test_get_data();
-                break;
-            case 3:
-                test_invalidate_data();
-                break;
-            default:
-                return 0;
-        }
     }
 }

@@ -1,63 +1,5 @@
 #include "user.h"
 
-char* msgs[] = {LOREM, EMERALD, LUCIFER};
-int sizes[] = {SIZE_LOREM, SIZE_EMERALD, SIZE_LUCIFER};
-
-void* test_put_data(void *arg){
-    int ret, size, tid = *(int*)arg, idx = rand()%3;
-    char *msg;
-
-    msg = malloc(sizes[idx]);
-    memcpy(msg, msgs[idx], sizes[idx]);
-    size = strlen(msg);
-
-    ret = syscall(put, msg, size);
-    if(ret < 0) {
-        check_error(tid, "PUT");
-        pthread_exit((void*)-1);
-    } else {
-        printf("[%d] - PUT on %d\n", tid, ret);
-        pthread_exit(0);
-    }
-}
-
-void* test_get_data(void *arg) {
-    int ret, tid = *(int*)arg;
-
-    char msg[SIZE_LOREM];
-
-    ret = syscall(get, (tid%NBLOCKS)+2, msg, SIZE_LOREM);
-    if(ret < 0) {
-        check_error(tid, "GET");
-        pthread_exit((void*)-1);
-    } else {
-        printf("[%d] - GET from %d (%.*s)\n", tid, (tid%NBLOCKS)+2, 10, msg);
-        pthread_exit(0);
-    }
-}
-
-void* test_invalidate_data(void *arg){
-    int ret, tid = *(int*)arg, block;
-
-    block = (rand()%NBLOCKS)+2; //(tid%NBLOCKS)+2;
-
-retry:
-    ret = syscall(inv, block);
-    if(ret < 0) {
-        check_error(tid, "INV");
-        if (errno == EAGAIN) {
-            printf("[%d] - INV on %d RETRY\n", tid, block);
-            sleep(1);
-            goto retry;
-        }
-
-        pthread_exit((void*)-1);
-    } else {
-        printf("[%d] - INV on %d\n", tid, block);
-        pthread_exit(0);
-    }
-}
-
 void only_writers(){
     int i, j;
     pthread_t tids[2][THREADS_PER_CALL];
@@ -68,8 +10,8 @@ void only_writers(){
         ids_p[i] = i;
         ids_i[i] = i+THREADS_PER_CALL;
 
-        pthread_create(&tids[0][i], NULL, test_put_data, (void *)(ids_p+i));
-        pthread_create(&tids[1][i], NULL, test_invalidate_data, (void *)(ids_i+i));
+        pthread_create(&tids[0][i], NULL, multi_put_data, (void *)(ids_p+i));
+        pthread_create(&tids[1][i], NULL, multi_invalidate_data, (void *)(ids_i+i));
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
@@ -91,9 +33,9 @@ void non_sequential(){
         ids_g[i] = i+THREADS_PER_CALL;
         ids_i[i] = i+z;
 
-        pthread_create(&tids[0][i], NULL, test_put_data, (void *)(ids_p+i));
-        pthread_create(&tids[1][i], NULL, test_get_data, (void *)(ids_g+i));
-        pthread_create(&tids[2][i], NULL, test_invalidate_data, (void *)(ids_i+i));
+        pthread_create(&tids[0][i], NULL, multi_put_data, (void *)(ids_p+i));
+        pthread_create(&tids[1][i], NULL, multi_get_data, (void *)(ids_g+i));
+        pthread_create(&tids[2][i], NULL, multi_invalidate_data, (void *)(ids_i+i));
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
@@ -112,15 +54,15 @@ void sequential_put(){
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
         ids_p[i] = i;
-        pthread_create(&tids[0][i], NULL, test_put_data, (void *)(ids_p+i));
+        pthread_create(&tids[0][i], NULL, multi_put_data, (void *)(ids_p+i));
     }
 
     z = THREADS_PER_CALL*2;
     for (i = 0; i < THREADS_PER_CALL; ++i) {
         ids_g[i] = i+THREADS_PER_CALL;
         ids_i[i] = i+z;
-        pthread_create(&tids[1][i], NULL, test_get_data, (void *)(ids_g+i));
-        pthread_create(&tids[2][i], NULL, test_invalidate_data, (void *)(ids_i+i));
+        pthread_create(&tids[1][i], NULL, multi_get_data, (void *)(ids_g+i));
+        pthread_create(&tids[2][i], NULL, multi_invalidate_data, (void *)(ids_i+i));
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
@@ -139,18 +81,18 @@ void sequential(){
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
         ids_p[i] = i;
-        pthread_create(&tids[0][i], NULL, test_put_data, (void *)(ids_p+i));
+        pthread_create(&tids[0][i], NULL, multi_put_data, (void *)(ids_p+i));
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
         ids_g[i] = i+THREADS_PER_CALL;
-        pthread_create(&tids[1][i], NULL, test_get_data, (void *)(ids_g+i));
+        pthread_create(&tids[1][i], NULL, multi_get_data, (void *)(ids_g+i));
     }
 
     z = THREADS_PER_CALL*2;
     for (i = 0; i < THREADS_PER_CALL; ++i) {
         ids_i[i] = i+z;
-        pthread_create(&tids[2][i], NULL, test_invalidate_data, (void *)(ids_i+i));
+        pthread_create(&tids[2][i], NULL, multi_invalidate_data, (void *)(ids_i+i));
     }
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
@@ -192,13 +134,13 @@ int main(int argc, char *argv[]){
 
     switch(getint()){
         case 1:
-            single_call(test_put_data);
+            single_call(multi_put_data);
             break;
         case 2:
-            single_call(test_get_data);
+            single_call(multi_get_data);
             break;
         case 3:
-            single_call(test_invalidate_data);
+            single_call(multi_invalidate_data);
             break;
         case 4:
             sequential();
