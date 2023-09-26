@@ -6,6 +6,7 @@
 #include <linux/slab.h>
 
 #include "../include/aos_fs.h"
+#include "../include/config.h"
 
 /**
  * The device should be mounted on whichever directory of the file system to enable the operations by threads.
@@ -19,6 +20,7 @@ static struct dentry_operations aos_de_ops = {
 };
 
 aos_fs_info_t *info;
+uint64_t is_mounted = 0;
 
 static int init_fs_info(struct aos_super_block* aos_sb) {
 
@@ -91,6 +93,7 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     struct inode *root_inode;
     struct buffer_head *bh;
     struct timespec64 curr_time;
+    int fail;
 
     /* Set block size */
     if(!sb_set_blocksize(sb, AOS_BLOCK_SIZE)) {
@@ -109,8 +112,9 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     bh = sb_bread(sb, SUPER_BLOCK_IDX);
     if(!bh) {
         printk(KERN_ALERT "%s: [aos_fill_super()] couldn't read the vfs superblock\n", MODNAME);
-        kfree(info);
-        return -EIO;
+
+        fail = -EIO;
+        goto failure_1;
     }
     memcpy(&info->sb, bh->b_data, AOS_BLOCK_SIZE);
     brelse(bh);
@@ -118,8 +122,9 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     /* Check magic number */
     if(info->sb.magic != MAGIC) {
         printk(KERN_ALERT "%s: [aos_fill_super()] incorrect magic number. abort mounting.\n", MODNAME);
-        kfree(info);
-        return -EBADF;
+
+        fail = -EBADF;
+        goto failure_1;
     }
 
     /* Fill superblock */
@@ -130,17 +135,18 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     info->vfs_sb = sb;
     if(init_fs_info(&info->sb)) {
         printk(KERN_ALERT "%s: [aos_fill_super()] couldn't initialize aos_fs_info structure\n", MODNAME);
-        kfree(info);
-        return -ENOMEM;
+
+        fail = -ENOMEM;
+        goto failure_1;
     }
 
     /* Get a VFS inode for the root directory */
     root_inode = iget_locked(sb, SUPER_BLOCK_IDX);
     if (!root_inode) {
         printk(KERN_ALERT "%s: [aos_fill_super()] couldn't lock the root inode\n", MODNAME);
-        kfree(info->free_blocks);
-        kfree(info);
-        return -ENOMEM;
+
+        fail = -ENOMEM;
+        goto failure_2;
     }
 
     if (root_inode->i_state & I_NEW) { // created a new inode
@@ -162,39 +168,48 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     if (!sb->s_root) {
         printk(KERN_ALERT "%s: [aos_fill_super()] couldn't set up the root dentry\n", MODNAME);
         iget_failed(root_inode);
-        kfree(info->free_blocks);
-        kfree(info);
-        return -ENOMEM;
+
+        fail = -ENOMEM;
+        goto failure_2;
     }
     sb->s_root->d_op = &aos_de_ops;
 
-    info->state = STATUS_INIT;
+    is_mounted = 1;
 
     // unlock the inode to make it usable
     unlock_new_inode(root_inode);
 
-    AUDIT { printk(KERN_INFO "%s: superblock fill function returned correctly.\n", MODNAME); }
-
     return 0;
+
+failure_2:
+    kfree(info->free_blocks);
+    kfree(info->put_map);
+    kfree(info->inv_map);
+    kfree(info->block_locks);
+failure_1:
+    kfree(info);
+    return fail;
 }
 
 static void aos_kill_superblock(struct super_block *sb){
-    unmount:
-    /* Atomically set the state of the device as unmounted, if and only if no new thread has accessed the device */
-    if (__sync_bool_compare_and_swap(&info->state, STATUS_INIT, 0L)) {
-        kfree(info->free_blocks);
-        kfree(info);
+    /* Atomically set the device as unmounted, to stop every new thread trying to access the device */
+    __atomic_store_n(&is_mounted, 0, __ATOMIC_RELAXED);
 
-        printk(KERN_INFO "%s: unmount complete...\n", MODNAME);
-
-        kill_block_super(sb);
-    } else {
-        /* Wait for pending operations */
-        wait_event_interruptible_timeout(wq, ((info->state << 1) == 0), msecs_to_jiffies(100));
-
+    /* Wait for every thread already in the device to complete */
+    while (info->counter) {
+        wait_event_interruptible_timeout(wq, (info->counter == 0), msecs_to_jiffies(JIFFIES));
         printk(KERN_INFO "%s: waiting to unmount...\n", MODNAME);
-        goto unmount;
     }
+
+    kfree(info->free_blocks);
+    kfree(info->put_map);
+    kfree(info->inv_map);
+    kfree(info->block_locks);
+    kfree(info);
+
+    printk(KERN_INFO "%s: unmount complete...\n", MODNAME);
+
+    kill_block_super(sb);
 }
 
 struct dentry *aos_mount(struct file_system_type *fs_type, int flags, const char *dev_name, void *data) {

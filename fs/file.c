@@ -27,7 +27,7 @@ int aos_open(struct inode *inode, struct file *filp){
     check_mount;
 
     /* Signal device usage */
-    __sync_fetch_and_add(&info->state, 1);
+    __sync_fetch_and_add(&info->counter, 1);
 
     printk(KERN_INFO "%s: device file successfully opened by thread %d\n", MODNAME, current->pid);
 
@@ -43,7 +43,7 @@ int aos_release(struct inode *inode, struct file *filp){
     // todo: invalidate further usage of device descriptor
 
     // atomic sub to usage counter
-    __sync_fetch_and_sub(&(info->state),1);
+    __sync_fetch_and_sub(&(info->counter), 1);
     wake_up_interruptible(&wq);
 
     printk(KERN_INFO "%s: device file closed by thread %d\n",MODNAME, current->pid);
@@ -68,7 +68,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     char *msg, *block_msg;
     loff_t b_idx, offset;
 
-    /* Check device state validity */
+    /* Check device counter validity */
     if (!info->first) return 0;
 
     /* Check parameter validity */

@@ -17,13 +17,11 @@
 #define FILENAME_MAXLEN 255
 #define ROOT_INODE_NUMBER 10
 #define FILE_INODE_NUMBER 1
-
-#define STATUS_INIT 0x8000000000000000
-#define check_mount if (!(info->state & (1L << 63))) return -ENODEV
-
 #define DEVICE_NAME "the-device"
 #define MODNAME "AOS"
 #define AUDIT if(1)
+
+#define check_mount if (!is_mounted) return -ENODEV
 
 /* Superblock definition */
 struct aos_super_block {
@@ -73,14 +71,11 @@ struct aos_data_block {
 typedef struct aos_fs_info {
     struct super_block *vfs_sb; /* VFS super block structure */
     struct aos_super_block sb;  /* AOS super block structure */
-    // todo: is_mounted can be signalled with a single bit - see if it can be merged with count in a variable "state"
-    uint64_t state;             /* Represents the state of the device: 1 bit for mount status and 63 for usage count */
-    //uint8_t is_mounted;         /* Signals that the state of the device */
-    //uint64_t count;             /* Number of threads currently operating on the device */
+    uint64_t counter;           /* Represents the usage count of the device */
     uint64_t first;             /* First valid block written chronologically */
     uint64_t last;              /* Last valid block written chronologically */
     //---------------------------------------------------------------------------
-    ulong *free_blocks;         /* Pointer to a bitmap to represent the state of each data block */
+    ulong *free_blocks;         /* Pointer to a bitmap to represent the counter of each data block */
     // todo: see if writers flags can be handled better
     ulong *put_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
     ulong *inv_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
@@ -88,12 +83,14 @@ typedef struct aos_fs_info {
     //------------------------------------------------------------------------
     seqlock_t *block_locks;
 } aos_fs_info_t;
+
+static DECLARE_WAIT_QUEUE_HEAD(wq);
 #endif
 
 extern const struct inode_operations aos_inode_ops;
 extern const struct file_operations aos_file_ops;
 extern const struct file_operations aos_dir_ops;
 extern struct file_system_type aos_fs_type;
-static DECLARE_WAIT_QUEUE_HEAD(wq);
+extern uint64_t is_mounted;
 
 #endif //SOA_PROJECT_AOS_FS_H

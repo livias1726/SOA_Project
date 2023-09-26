@@ -36,13 +36,12 @@ asmlinkage int sys_put_data(char * source, size_t size){
     struct aos_super_block aos_sb;
     int nblocks, avb_size, fail, old_first, first_put;
     uint64_t block_index, old_last;
-    int counter;
 
     /* Check if device is mounted */
     check_mount;
 
     /* Signal device usage */
-    counter = __sync_fetch_and_add(&info->state, 1);
+    __sync_fetch_and_add(&info->counter, 1);
 
     /* Check input parameter */
     aos_sb = info->sb;
@@ -103,7 +102,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     }
 
     /* Release resources */
-    __sync_fetch_and_sub(&info->state, 1);
+    __sync_fetch_and_sub(&info->counter, 1);
     wake_up_interruptible(&wq);
 
     AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put %d bytes in block %llu\n", MODNAME, current->pid, fail, block_index); }
@@ -121,7 +120,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
         clear_bit(block_index, info->put_map);
         clear_bit(block_index, info->free_blocks);
     failure_1:
-        __sync_fetch_and_sub(&info->state, 1);
+        __sync_fetch_and_sub(&info->counter, 1);
         wake_up_interruptible(&wq);
 
         AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put failed on error %d\n", MODNAME, current->pid, fail); }
@@ -150,7 +149,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     check_mount;
 
     /* Signal device usage */
-    __sync_fetch_and_add(&info->state, 1);
+    __sync_fetch_and_add(&info->counter, 1);
 
     /* Check input parameters */
     aos_sb = info->sb;
@@ -194,14 +193,14 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
 
-    __sync_fetch_and_sub(&info->state, 1);
+    __sync_fetch_and_sub(&info->counter, 1);
     wake_up_interruptible(&wq);
 
     AUDIT { printk(KERN_INFO "%s: [get_data()] successful - read %d bytes in block %llu\n", MODNAME, loaded_bytes, offset); }
     return loaded_bytes;
 
     failure:
-        __sync_fetch_and_sub(&info->state, 1);
+        __sync_fetch_and_sub(&info->counter, 1);
         wake_up_interruptible(&wq);
 
         AUDIT { printk(KERN_INFO "%s: [get_data()] on block %llu failed with error %d\n", MODNAME, offset, fail); }
@@ -228,7 +227,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     check_mount;
 
     /* Signal device usage */
-    __sync_fetch_and_add(&info->state, 1);
+    __sync_fetch_and_add(&info->counter, 1);
 
     /* Check input parameters */
     nblocks = info->sb.partition_size;
@@ -311,7 +310,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     clear_bit(offset, info->inv_map);
 
     /* Release resources */
-    __sync_fetch_and_sub(&info->state, 1);
+    __sync_fetch_and_sub(&info->counter, 1);
     wake_up_interruptible(&wq);
 
     AUDIT { printk(KERN_INFO "%s: [invalidate_data() - %d] Invalidated block %d\n", MODNAME, current->pid, offset); }
@@ -326,7 +325,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     failure_2:
         clear_bit(offset, info->inv_map);
     failure_1:
-        __sync_fetch_and_sub(&info->state, 1);
+        __sync_fetch_and_sub(&info->counter, 1);
         wake_up_interruptible(&wq);
 
         AUDIT { printk(KERN_INFO "%s: [invalidate_data() - %d] Invalidation of block %d failed with error %d.\n",

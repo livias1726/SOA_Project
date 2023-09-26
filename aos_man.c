@@ -7,7 +7,6 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/buffer_head.h>
-#include <linux/string.h>
 
 #include "include/config.h"
 #include "include/aos_fs.h"
