@@ -24,10 +24,10 @@ extern aos_fs_info_t *info;
 int aos_open(struct inode *inode, struct file *filp){
 
     /* Check if device is mounted */
-    if (!info->is_mounted) return -ENODEV;
+    check_mount;
 
     /* Signal device usage */
-    __sync_fetch_and_add(&info->count, 1);
+    __sync_fetch_and_add(&info->state, 1);
 
     printk(KERN_INFO "%s: device file successfully opened by thread %d\n", MODNAME, current->pid);
 
@@ -43,7 +43,9 @@ int aos_release(struct inode *inode, struct file *filp){
     // todo: invalidate further usage of device descriptor
 
     // atomic sub to usage counter
-    __sync_fetch_and_sub(&(info->count),1);
+    __sync_fetch_and_sub(&(info->state),1);
+    wake_up_interruptible(&wq);
+
     printk(KERN_INFO "%s: device file closed by thread %d\n",MODNAME, current->pid);
 
     return 0;
@@ -52,8 +54,8 @@ int aos_release(struct inode *inode, struct file *filp){
 /*
  * Reads 'count' bytes from the device starting from the oldest message; the value *f_pos (which usually corresponds to
  * the file pointer) is ignored.
- * todo The content must be delivered chronologically and the operation should only return data related to messages
- *  not invalidated before the access in read mode to the corresponding block of the device in an I/O session.
+ * The content must be delivered chronologically and the operation should only return data related to messages
+ * not invalidated before the access in read mode to the corresponding block of the device in an I/O session.
  * */
 ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 
@@ -81,7 +83,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 
     /* Parse file pointer */
     b_idx = (*f_pos >> 32) % nblocks;   // retrieve last block accessed by the current thread (high 32 bits)
-    if (!b_idx) b_idx = info->first; // todo: maybe need to be atomic
+    if (!b_idx) b_idx = info->first;
     offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread in the block (low 32 bits)
     last_block = info->last;
 

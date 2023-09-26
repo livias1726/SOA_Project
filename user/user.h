@@ -15,7 +15,7 @@
 #define NBLOCKS 10
 #define DEVICE_SIZE (4096 * NBLOCKS)
 #define NUM_SYSCALLS 3
-#define THREADS_PER_CALL 20
+#define THREADS_PER_CALL 10
 #define MAX_IN 5
 
 #define LOREM "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
@@ -33,5 +33,9 @@ int inv;
 int check_input(int argc, char **argv);
 int getint();
 void check_error(int tid, char* call);
+void* test_put_data(void *arg);
+void* test_get_data(void *arg);
+void* test_invalidate_data(void *arg);
+void* multi_orc();
 
 #endif //SOA_PROJECT_USER_H

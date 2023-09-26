@@ -72,7 +72,6 @@ int print_data_blocks(int fd, int nblocks){
         printf("\tis valid: %lu\n", aos_block.metadata.is_valid);
         printf("\tprev: %lu\n", aos_block.metadata.prev);
         printf("\tnext: %lu\n", aos_block.metadata.next);
-        printf("\tcounter: %lu\n", aos_block.metadata.counter);
     }
 
     return 0;

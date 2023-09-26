@@ -36,12 +36,13 @@ asmlinkage int sys_put_data(char * source, size_t size){
     struct aos_super_block aos_sb;
     int nblocks, avb_size, fail, old_first, first_put;
     uint64_t block_index, old_last;
+    int counter;
 
     /* Check if device is mounted */
-    if (!info->is_mounted) return -ENODEV;
+    check_mount;
 
     /* Signal device usage */
-    __sync_fetch_and_add(&info->count, 1);
+    counter = __sync_fetch_and_add(&info->state, 1);
 
     /* Check input parameter */
     aos_sb = info->sb;
@@ -102,7 +103,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
     }
 
     /* Release resources */
-    __sync_fetch_and_sub(&info->count, 1);
+    __sync_fetch_and_sub(&info->state, 1);
+    wake_up_interruptible(&wq);
+
     AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put %d bytes in block %llu\n", MODNAME, current->pid, fail, block_index); }
     return block_index;
 
@@ -118,7 +121,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
         clear_bit(block_index, info->put_map);
         clear_bit(block_index, info->free_blocks);
     failure_1:
-        __sync_fetch_and_sub(&info->count, 1);
+        __sync_fetch_and_sub(&info->state, 1);
+        wake_up_interruptible(&wq);
+
         AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put failed on error %d\n", MODNAME, current->pid, fail); }
         return fail;
 }
@@ -142,10 +147,10 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     size_t ret;
 
     /* Check if device is mounted */
-    if (!info->is_mounted) return -ENODEV;
+    check_mount;
 
     /* Signal device usage */
-    __sync_fetch_and_add(&info->count, 1);
+    __sync_fetch_and_add(&info->state, 1);
 
     /* Check input parameters */
     aos_sb = info->sb;
@@ -189,13 +194,18 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     ret = copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
 
-    __sync_fetch_and_sub(&info->count, 1);
+    __sync_fetch_and_sub(&info->state, 1);
+    wake_up_interruptible(&wq);
+
     AUDIT { printk(KERN_INFO "%s: [get_data()] successful - read %d bytes in block %llu\n", MODNAME, loaded_bytes, offset); }
     return loaded_bytes;
 
     failure:
+        __sync_fetch_and_sub(&info->state, 1);
+        wake_up_interruptible(&wq);
+
         AUDIT { printk(KERN_INFO "%s: [get_data()] on block %llu failed with error %d\n", MODNAME, offset, fail); }
-        __sync_fetch_and_sub(&info->count, 1);
+
         return fail;
 }
 
@@ -215,10 +225,10 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     uint64_t prev, next;
 
     /* Check if device is mounted */
-    if (!info->is_mounted) return -ENODEV;
+    check_mount;
 
     /* Signal device usage */
-    __sync_fetch_and_add(&info->count, 1);
+    __sync_fetch_and_add(&info->state, 1);
 
     /* Check input parameters */
     nblocks = info->sb.partition_size;
@@ -268,8 +278,6 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     fail = wait_inv(info->inv_map, data_block->metadata.next);
     if (fail < 0) goto failure_3;
 
-    // checkme: if the invalidation finds itself waiting on prev and next, when the wait is cleared should it re-read
-    //  the block's information??
     prev = data_block->metadata.prev;
     next = data_block->metadata.next;
 
@@ -303,7 +311,9 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     clear_bit(offset, info->inv_map);
 
     /* Release resources */
-    __sync_fetch_and_sub(&info->count, 1);
+    __sync_fetch_and_sub(&info->state, 1);
+    wake_up_interruptible(&wq);
+
     AUDIT { printk(KERN_INFO "%s: [invalidate_data() - %d] Invalidated block %d\n", MODNAME, current->pid, offset); }
     return 0;
 
@@ -316,7 +326,9 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     failure_2:
         clear_bit(offset, info->inv_map);
     failure_1:
-        __sync_fetch_and_sub(&info->count, 1);
+        __sync_fetch_and_sub(&info->state, 1);
+        wake_up_interruptible(&wq);
+
         AUDIT { printk(KERN_INFO "%s: [invalidate_data() - %d] Invalidation of block %d failed with error %d.\n",
                        MODNAME, current->pid, offset, fail); }
         return fail;

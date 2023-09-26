@@ -14,24 +14,10 @@ extern aos_fs_info_t *info;
 static int change_block_prev(int blk, int prev_blk){
     struct buffer_head *bh_next;
     struct aos_data_block *next_block;
-    int pc;
 
     bh_next = sb_bread(info->vfs_sb, blk);
     if (!bh_next) return -EIO;
     next_block = (struct aos_data_block*)bh_next->b_data;
-
-    /* Change next block's 'prev' metadata
-    pc = __sync_fetch_and_add(&next_block->metadata.counter, 1);
-    if (!pc) write_seqlock(&info->block_locks[blk]);
-
-    next_block->metadata.prev = prev_blk;
-
-    pc = __sync_sub_and_fetch(&next_block->metadata.counter, 1);
-    if (!pc) {
-        mark_buffer_dirty(bh_next);
-        write_sequnlock(&info->block_locks[blk]);
-    }
-    */
 
     write_seqlock(&info->block_locks[blk]);
     next_block->metadata.prev = prev_blk;
@@ -51,24 +37,10 @@ static int change_block_prev(int blk, int prev_blk){
 static int change_block_next(int blk, int next_blk){
     struct buffer_head *bh_prev;
     struct aos_data_block *prev_block;
-    int pc;
 
     bh_prev = sb_bread(info->vfs_sb, blk);
     if(!bh_prev) return -EIO;
     prev_block = (struct aos_data_block*)bh_prev->b_data;
-
-    /* Change previous block's 'next' metadata
-    pc = __sync_fetch_and_add(&prev_block->metadata.counter, 1);
-    if (!pc) write_seqlock(&info->block_locks[blk]);
-
-    prev_block->metadata.next = next_blk;
-
-    pc = __sync_sub_and_fetch(&prev_block->metadata.counter, 1);
-    if (!pc) {
-        mark_buffer_dirty(bh_prev);
-        write_sequnlock(&info->block_locks[blk]);
-    }
-     */
 
     write_seqlock(&info->block_locks[blk]);
     prev_block->metadata.next = next_blk;
@@ -86,7 +58,7 @@ static int change_block_next(int blk, int next_blk){
 int change_blocks_metadata(int prev_blk, int next_blk){
     struct buffer_head *bh_next, *bh_prev;
     struct aos_data_block *next_block, *prev_block;
-    int pc, fail;
+    int fail;
 
     if (prev_blk == 1) {
         fail = change_block_prev(next_blk, 1);
@@ -103,32 +75,6 @@ int change_blocks_metadata(int prev_blk, int next_blk){
     bh_next = sb_bread(info->vfs_sb, next_blk);
     if (!bh_next) return -EIO;
     next_block = (struct aos_data_block*)bh_next->b_data;
-
-    /* Change previous block's 'next' metadata
-    pc = __sync_fetch_and_add(&prev_block->metadata.counter, 1);
-    if (!pc) write_seqlock(&info->block_locks[prev_blk]);
-
-    prev_block->metadata.next = next_blk;
-
-    pc = __sync_sub_and_fetch(&prev_block->metadata.counter, 1);
-    if (!pc) {
-        mark_buffer_dirty(bh_prev);
-        write_sequnlock(&info->block_locks[prev_blk]);
-    }
-    */
-
-    /* Change next block's 'prev' metadata
-    pc = __sync_fetch_and_add(&next_block->metadata.counter, 1);
-    if (!pc) write_seqlock(&info->block_locks[next_blk]);
-
-    next_block->metadata.prev = prev_blk;
-
-    pc = __sync_sub_and_fetch(&next_block->metadata.counter, 1);
-    if (!pc) {
-        mark_buffer_dirty(bh_next);
-        write_sequnlock(&info->block_locks[next_blk]);
-    }
-     */
 
     write_seqlock(&info->block_locks[prev_blk]);
     prev_block->metadata.next = next_blk;
@@ -148,10 +94,16 @@ int change_blocks_metadata(int prev_blk, int next_blk){
 /**
  * Inserts a new message in the given block, updating its metadata
  * */
+/* noteme: When more than one thread is allowed to write on the same block
+    * it always happens on different data/metadata, so that writers can operate concurrently.
+    * There's no need for each writer to call write_seqlock as this will block each operation uselessly.
+    * To get the write_lock on the block and release it, it is used a counter variable:
+    * - If the variable was 0 before increasing its value, take the write_lock.
+    * - If the variable becomes 0 after decreasing its value, release the write_lock. */
 int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int pc, res;
+    int res;
     size_t ret;
 
     bh = sb_bread(info->vfs_sb, blk);
@@ -161,7 +113,6 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
     /* If the block is the first to be written (prev is 1), then there's no need to update the previous one
      * to point to the new block. */
     if (prev == 1) {
-        //*old_first = __sync_val_compare_and_swap(&info->first, info->first, blk);
         *old_first = __atomic_exchange_n(&info->first, blk, __ATOMIC_RELAXED);
         DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'first' from %d to %d. \n",
                        MODNAME, current->pid, *old_first, blk); }
@@ -173,29 +124,6 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
 
     /* Effective changes in the data block will be done after eventual 'change_next_block()' is successful
      * to avoid needing to abort the operation. */
-
-    /* When more than one thread is allowed to write on the same block
-     * it always happens on different data/metadata, so that writers can operate concurrently.
-     * There's no need for each writer to call write_seqlock as this will block each operation uselessly.
-     * To get the write_lock on the block and release it, it is used a counter variable:
-     * - If the variable was 0 before increasing its value, take the write_lock.
-     * - If the variable becomes 0 after decreasing its value, release the write_lock.
-    pc = __sync_fetch_and_add(&data_block->metadata.counter, 1);
-    if (!pc) write_seqlock(&info->block_locks[blk]); // the first to operate on the block takes the write lock
-
-    // Write block on device
-    ret = copy_from_user(data_block->data.msg, source, size);
-    size -= ret;
-    data_block->data.msg[size+1] = '\0';
-    data_block->metadata.is_valid = 1;
-    data_block->metadata.prev = prev;
-
-    pc = __sync_sub_and_fetch(&data_block->metadata.counter, 1);
-    if (!pc) { // the last to operate on the block releases the write lock
-        mark_buffer_dirty(bh);
-        WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
-        write_sequnlock(&info->block_locks[blk]);
-    }*/
 
     write_seqlock(&info->block_locks[blk]); // the first to operate on the block takes the write lock
 
@@ -229,12 +157,6 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
  *      updated to point to one-another and unlink the invalid block.
  * */
 void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
-    /*
-    int pc;
-
-    pc = __sync_fetch_and_add(&data_block->metadata.counter, 1);
-    if (!pc) write_seqlock(&info->block_locks[blk]); // the first to operate on the block takes the write lock
-     */
 
     write_seqlock(&info->block_locks[blk]);
 
@@ -246,13 +168,6 @@ void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_
     mark_buffer_dirty(bh);
     write_sequnlock(&info->block_locks[blk]);
 
-    /*
-    pc = __sync_sub_and_fetch(&data_block->metadata.counter, 1);
-    if (!pc) { // the last to operate on the block releases the write lock
-        mark_buffer_dirty(bh);
-        write_sequnlock(&info->block_locks[blk]);
-    }
-    */
     brelse(bh);
 }
 

@@ -168,7 +168,7 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
     }
     sb->s_root->d_op = &aos_de_ops;
 
-    info->is_mounted = 1;
+    info->state = STATUS_INIT;
 
     // unlock the inode to make it usable
     unlock_new_inode(root_inode);
@@ -179,15 +179,22 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 }
 
 static void aos_kill_superblock(struct super_block *sb){
+    unmount:
+    /* Atomically set the state of the device as unmounted, if and only if no new thread has accessed the device */
+    if (__sync_bool_compare_and_swap(&info->state, STATUS_INIT, 0L)) {
+        kfree(info->free_blocks);
+        kfree(info);
 
-    // todo: wait for pending operations
+        printk(KERN_INFO "%s: unmount complete...\n", MODNAME);
 
-    // todo: signal device unmounting
+        kill_block_super(sb);
+    } else {
+        /* Wait for pending operations */
+        wait_event_interruptible_timeout(wq, ((info->state << 1) == 0), msecs_to_jiffies(100));
 
-    kfree(info->free_blocks);
-    kfree(info);
-
-    kill_block_super(sb);
+        printk(KERN_INFO "%s: waiting to unmount...\n", MODNAME);
+        goto unmount;
+    }
 }
 
 struct dentry *aos_mount(struct file_system_type *fs_type, int flags, const char *dev_name, void *data) {
