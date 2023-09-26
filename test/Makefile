@@ -1,8 +1,8 @@
 all:
-	gcc test_single_sys.c ../user/single_syscalls.c ../user/utils.c -o test_single_sys
-	gcc test_multi_sys.c ../user/multi_syscalls.c ../user/utils.c -lpthread -o test_multi_sys
-	gcc test_dev.c ../user/device_ops.c ../user/utils.c -lpthread -o test_dev
-	gcc super_test.c ../user/device_ops.c ../user/multi_syscalls.c ../user/utils.c -lpthread -o super_test
+	gcc test_single_sys.c ./user/single_syscalls.c ./user/utils.c -o test_single_sys
+	gcc test_multi_sys.c ./user/multi_syscalls.c ./user/utils.c -lpthread -o test_multi_sys
+	gcc test_dev.c ./user/device_ops.c ./user/utils.c -lpthread -o test_dev
+	gcc super_test.c ./user/device_ops.c ./user/multi_syscalls.c ./user/utils.c -lpthread -o super_test
 
 clean:
 	rm test_single_sys
