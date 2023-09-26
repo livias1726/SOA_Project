@@ -76,7 +76,7 @@ void orc(){
     printf("2. Reading the device: ");
     ret = read(fd, buf, DEVICE_SIZE);
     CHECK(ret)
-    printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
+    printf("\t%d bytes read.\n", ret); //Retrieved message is: %s\n", ret, buf);
 
     free(buf);
 

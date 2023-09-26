@@ -12,7 +12,7 @@
 #include <pthread.h>
 
 #define DEVICE_PATH "../fs/mount/the-device"
-#define NBLOCKS 10
+#define NBLOCKS 100
 #define DEVICE_SIZE (4096 * NBLOCKS)
 #define NUM_SYSCALLS 3
 #define THREADS_PER_CALL 10

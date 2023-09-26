@@ -161,8 +161,10 @@ void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_
     write_seqlock(&info->block_locks[blk]);
 
     /* Change the block's metadata */
+    /*
     data_block->metadata.prev = 0;
     data_block->metadata.next = 0;
+     */
     data_block->metadata.is_valid = 0;
 
     mark_buffer_dirty(bh);

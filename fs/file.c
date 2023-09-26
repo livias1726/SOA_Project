@@ -118,8 +118,6 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         /* Check data validity: invalidation could happen while reading the block.
          * This ensures that a writing on the block is always detected, even if the read is already executing. */
         if (!data_block.metadata.is_valid) {
-            /* warning: if invalidate zeroes out the prev and next metadata and an invalidation performs while
-             *  reading, the chain will break, as the algorithm */
             b_idx = data_block.metadata.next;
             continue;
         }
