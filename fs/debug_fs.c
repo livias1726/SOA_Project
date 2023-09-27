@@ -20,7 +20,11 @@ int print_superblock(int fd, int *d_blocks){
     printf("Superblock: \n");
     printf("\tmagic: %lx\n", aos_sb.magic);
     printf("\tblock size: %lu\n", aos_sb.block_size);
+    printf("\tdata block size: %lu\n", aos_sb.data_block_size);
     printf("\tpartition size: %lu\n", aos_sb.partition_size);
+    printf("\tfirst: %lu\n", aos_sb.first);
+    printf("\tlast: %lu\n", aos_sb.last);
+    printf("\tfree blocks: %lx\n", aos_sb.padding[0]);
 
     *d_blocks = aos_sb.partition_size-2;
     return 0;

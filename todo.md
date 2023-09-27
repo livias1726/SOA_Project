@@ -15,3 +15,8 @@
   * but device info (first, last, ecc) does not.
     * To save those info, they need to be maintained in the superblock or saved otherwise at the unmounting.
 
+
+# TEST #
+
+1. Limit to longs*32 when building the bitmap
+2. Constant bitmaps (not dynamically allocated)

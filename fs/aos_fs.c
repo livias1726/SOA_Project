@@ -27,6 +27,7 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     int nblocks = aos_sb->partition_size;
     int longs = BITS_TO_LONGS(nblocks);     /* Number of unsigned longs needed to cover nblocks bits */
     int lim, i;
+    int bit = 0;
 
     /* Allocate bitmaps */
     info->free_blocks = kzalloc(longs * sizeof(long), GFP_KERNEL);
@@ -46,9 +47,9 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     }
 
     /* TODO: read free map from superblock */
-    lim = longs * 32; //BITS_PER_LONG
-    bitmap_or(info->free_blocks, info->free_blocks, aos_sb->padding, lim);
-    for (i = nblocks; i < lim; ++i) { __set_bit(i, info->free_blocks); }
+    __set_bit(0, info->free_blocks);
+    __set_bit(1, info->free_blocks);
+    //bitmap_or(info->free_blocks, info->free_blocks, aos_sb->padding, lim);
 
     info->first = aos_sb->first;
     info->last = aos_sb->last;
@@ -209,7 +210,7 @@ static void aos_kill_superblock(struct super_block *sb){
     /* Save FS info */
     aos_sb->first = info->first;
     aos_sb->last = info->last;
-    bitmap_copy(aos_sb->padding, info->free_blocks, aos_sb->partition_size);
+    //bitmap_copy(aos_sb->padding, info->free_blocks, aos_sb->partition_size);
 
     mark_buffer_dirty(bh);
     sync_dirty_buffer(bh);

@@ -13,13 +13,13 @@ static int build_superblock(int fd, int nblocks){
     struct aos_super_block aos_sb = {
             .magic = MAGIC,
             .block_size = AOS_BLOCK_SIZE,
-            .data_block_size = sizeof(struct aos_data_block),
+            .data_block_size = sizeof(struct aos_db_userdata),
             .partition_size = nblocks+2,
             .last = 1,
             .padding = 0
     };
 
-    aos_sb.padding[0] = 0xC0; /* First byte set as: 11000000 */
+    //aos_sb.padding[0] = 0xC0; /* First byte set as: 11000000 */
 
     ret = write(fd, (char *)&aos_sb, sizeof(aos_sb));
     if (ret != AOS_BLOCK_SIZE) {

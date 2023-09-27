@@ -22,6 +22,7 @@
 #define AUDIT if(1)
 
 #define check_mount if (!is_mounted) return -ENODEV
+#define EXTRA_BITS(dim) (AOS_BLOCK_SIZE/sizeof(ulong) - ((dim) * (sizeof(uint64_t)/sizeof(ulong))))
 
 /* Superblock definition */
 struct aos_super_block {
@@ -34,7 +35,7 @@ struct aos_super_block {
 
     //todo: padding to fit into a single block: used to save the free blocks bitmap:
     // max 32384 bits (1012 ulongs)
-    ulong padding[AOS_BLOCK_SIZE/sizeof(ulong) - (6 * (sizeof(uint64_t)/sizeof(ulong)))];
+    ulong padding[EXTRA_BITS(6)];
 };
 
 /* inode definition */
