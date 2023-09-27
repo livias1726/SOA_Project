@@ -7,13 +7,6 @@
 
 #include "../include/aos_fs.h"
 
-/*
- * This test-level software will write the following information onto the disk
- * - BLOCK 0, super block;
- * - BLOCK 1, inodes block (the inode for root is volatile);
- * - BLOCK 2, ... , nblocks+2, data blocks of the device
-*/
-
 static int build_superblock(int fd, int nblocks){
     ssize_t ret;
 
@@ -22,7 +15,11 @@ static int build_superblock(int fd, int nblocks){
             .block_size = AOS_BLOCK_SIZE,
             .data_block_size = sizeof(struct aos_data_block),
             .partition_size = nblocks+2,
+            .last = 1,
+            .padding = 0
     };
+
+    aos_sb.padding[0] = 0xC0; /* First byte set as: 11000000 */
 
     ret = write(fd, (char *)&aos_sb, sizeof(aos_sb));
     if (ret != AOS_BLOCK_SIZE) {

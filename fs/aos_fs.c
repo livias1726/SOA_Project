@@ -25,9 +25,8 @@ uint64_t is_mounted = 0;
 static int init_fs_info(struct aos_super_block* aos_sb) {
 
     int nblocks = aos_sb->partition_size;
-    int longs = BITS_TO_LONGS(nblocks);
-    int lim;
-    int i;
+    int longs = BITS_TO_LONGS(nblocks);     /* Number of unsigned longs needed to cover nblocks bits */
+    int lim, i;
 
     /* Allocate bitmaps */
     info->free_blocks = kzalloc(longs * sizeof(long), GFP_KERNEL);
@@ -35,37 +34,33 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
         printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
         goto fail_1;
     }
-
     info->put_map = kzalloc(longs * sizeof(long), GFP_KERNEL);
     if (!info->put_map) {
-        printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
+        printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate PUT bitmap\n", MODNAME);
         goto fail_2;
     }
-
     info->inv_map = kzalloc(longs * sizeof(long), GFP_KERNEL);
     if (!info->inv_map) {
-        printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate free blocks bitmap\n", MODNAME);
+        printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate INVALIDATE bitmap\n", MODNAME);
         goto fail_3;
     }
 
-    __set_bit(0, info->free_blocks);
-    __set_bit(1, info->free_blocks);
-    lim = longs * 64;
-    for (i = nblocks; i < lim; ++i) { // limits access by put to the unavailable blocks
-        __set_bit(i, info->free_blocks);
-    }
-    info->last = 1;
+    /* TODO: read free map from superblock */
+    lim = longs * 32; //BITS_PER_LONG
+    bitmap_or(info->free_blocks, info->free_blocks, aos_sb->padding, lim);
+    for (i = nblocks; i < lim; ++i) { __set_bit(i, info->free_blocks); }
 
-    // init every seqlock associated to each block
+    info->first = aos_sb->first;
+    info->last = aos_sb->last;
+
+    /* Init every seqlock associated to each block */
     info->block_locks = kzalloc(nblocks * sizeof(seqlock_t), GFP_KERNEL);
     if (!info->block_locks) {
         printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate seqlocks\n", MODNAME);
         goto fail_4;
     }
 
-    for (i = 0; i < nblocks; ++i) {
-        seqlock_init(&info->block_locks[i]);
-    }
+    for (i = 0; i < nblocks; ++i) { seqlock_init(&info->block_locks[i]); }
 
     info->vfs_sb->s_fs_info = info;
 
@@ -192,6 +187,9 @@ failure_1:
 }
 
 static void aos_kill_superblock(struct super_block *sb){
+    struct buffer_head *bh;
+    struct aos_super_block *aos_sb;
+
     /* Atomically set the device as unmounted, to stop every new thread trying to access the device */
     __atomic_store_n(&is_mounted, 0, __ATOMIC_RELAXED);
 
@@ -201,6 +199,23 @@ static void aos_kill_superblock(struct super_block *sb){
         printk(KERN_INFO "%s: waiting to unmount...\n", MODNAME);
     }
 
+    /* Read superblock */
+    bh = sb_bread(sb, SUPER_BLOCK_IDX);
+    if(!bh) {
+        printk(KERN_ALERT "%s: [aos_kill_super()] couldn't save info in the vfs superblock\n", MODNAME);
+        goto failure;
+    }
+    aos_sb = (struct aos_super_block*)bh->b_data;
+    /* Save FS info */
+    aos_sb->first = info->first;
+    aos_sb->last = info->last;
+    bitmap_copy(aos_sb->padding, info->free_blocks, aos_sb->partition_size);
+
+    mark_buffer_dirty(bh);
+    sync_dirty_buffer(bh);
+    brelse(bh);
+
+failure:
     kfree(info->free_blocks);
     kfree(info->put_map);
     kfree(info->inv_map);

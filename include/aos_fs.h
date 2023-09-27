@@ -29,9 +29,12 @@ struct aos_super_block {
     uint64_t block_size;        /* Block size in bytes */
     uint64_t data_block_size;   /* Block size in bytes */
     uint64_t partition_size;    /* Number of blocks in the file system */
+    uint64_t first;             /* First valid block to be restored when mounting */
+    uint64_t last;              /* Last valid block to be restored when mounting */
 
-    // padding to fit into a single (first) block
-    char padding[AOS_BLOCK_SIZE - (4 * sizeof(uint64_t))];
+    //todo: padding to fit into a single block: used to save the free blocks bitmap:
+    // max 32384 bits (1012 ulongs)
+    ulong padding[AOS_BLOCK_SIZE/sizeof(ulong) - (6 * (sizeof(uint64_t)/sizeof(ulong)))];
 };
 
 /* inode definition */
