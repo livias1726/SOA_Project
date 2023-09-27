@@ -33,9 +33,7 @@ struct aos_super_block {
     uint64_t first;             /* First valid block to be restored when mounting */
     uint64_t last;              /* Last valid block to be restored when mounting */
 
-    //todo: padding to fit into a single block: used to save the free blocks bitmap:
-    // max 32384 bits (1012 ulongs)
-    ulong padding[EXTRA_BITS(6)];
+    ulong padding[EXTRA_BITS(6)]; /* Padding to fit into a single block: used to save the free blocks bitmap */
 };
 
 /* inode definition */

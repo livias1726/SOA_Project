@@ -19,7 +19,7 @@ static int build_superblock(int fd, int nblocks){
             .padding = 0
     };
 
-    //aos_sb.padding[0] = 0xC0; /* First byte set as: 11000000 */
+    *aos_sb.padding |= 3UL; /* Sets the first and second bits of the bitmap to lock superblock and inode */
 
     ret = write(fd, (char *)&aos_sb, sizeof(aos_sb));
     if (ret != AOS_BLOCK_SIZE) {

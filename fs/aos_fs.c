@@ -26,8 +26,7 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
 
     int nblocks = aos_sb->partition_size;
     int longs = BITS_TO_LONGS(nblocks);     /* Number of unsigned longs needed to cover nblocks bits */
-    int lim, i;
-    int bit = 0;
+    int i;
 
     /* Allocate bitmaps */
     info->free_blocks = kzalloc(longs * sizeof(long), GFP_KERNEL);
@@ -47,9 +46,9 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     }
 
     /* TODO: read free map from superblock */
-    __set_bit(0, info->free_blocks);
-    __set_bit(1, info->free_blocks);
-    //bitmap_or(info->free_blocks, info->free_blocks, aos_sb->padding, lim);
+    //__set_bit(0, info->free_blocks);
+    //__set_bit(1, info->free_blocks);
+    bitmap_or(info->free_blocks, info->free_blocks, aos_sb->padding, nblocks);
 
     info->first = aos_sb->first;
     info->last = aos_sb->last;
@@ -210,7 +209,7 @@ static void aos_kill_superblock(struct super_block *sb){
     /* Save FS info */
     aos_sb->first = info->first;
     aos_sb->last = info->last;
-    //bitmap_copy(aos_sb->padding, info->free_blocks, aos_sb->partition_size);
+    memcpy(aos_sb->padding, info->free_blocks, BITS_TO_LONGS(aos_sb->partition_size));
 
     mark_buffer_dirty(bh);
     sync_dirty_buffer(bh);
@@ -223,9 +222,9 @@ failure:
     kfree(info->block_locks);
     kfree(info);
 
-    printk(KERN_INFO "%s: unmount complete...\n", MODNAME);
-
     kill_block_super(sb);
+
+    printk(KERN_INFO "%s: Unmount complete.\n", MODNAME);
 }
 
 struct dentry *aos_mount(struct file_system_type *fs_type, int flags, const char *dev_name, void *data) {
