@@ -104,8 +104,12 @@ int main(int argc, char *argv[])
     }
 
     /* Retrieve NBLOCKS */
-    if ((nblocks = atoi(argv[2])) < 1){
-        printf("NBLOCKS must be at least 1\n");
+    nblocks = atoi(argv[2]);
+    if (nblocks < 1){
+        printf("NBLOCKS must be at least 1 to have at least 1 data block\n");
+        goto failure_2;
+    } else if (nblocks > NBLOCKS) {
+        printf("NBLOCKS exceeds the maximum number of manageable blocks (%d)\n", NBLOCKS);
         goto failure_2;
     }
 

@@ -50,7 +50,6 @@ retry:
             sleep(1);
             goto retry;
         }
-
         pthread_exit((void*)-1);
     } else {
         printf("[%d] - INV on %d\n", tid, block);

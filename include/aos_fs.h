@@ -2,12 +2,12 @@
 #define SOA_PROJECT_AOS_FS_H
 
 #ifdef __KERNEL__
-#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/fs.h"
-#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/types.h"
-#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/spinlock.h"
-#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/seqlock.h"
-#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/slab.h"
-#include "../../../../../../../usr/src/linux-headers-5.4.0-156-generic/include/linux/bitmap.h"
+#include <linux/fs.h>
+#include <linux/types.h>
+#include <linux/spinlock.h>
+#include <linux/seqlock.h>
+#include <linux/slab.h>
+#include <linux/bitmap.h>
 #endif
 
 #define MAGIC 0x42424242
@@ -17,6 +17,7 @@
 #define FILENAME_MAXLEN 255
 #define ROOT_INODE_NUMBER 10
 #define FILE_INODE_NUMBER 1
+#define NBLOCKS 32384           /* Maximum number of manageable blocks as limited by the use of 'padding' */
 #define DEVICE_NAME "the-device"
 #define MODNAME "AOS"
 #define AUDIT if(1)

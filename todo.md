@@ -5,3 +5,6 @@
 
 * PUT needs to lock last to avoid conflicts with INV after changing 'last':
   * INV will see this as ENODATA, even though it will be better if it's just a wait on bit.
+
+
+* Gestisci read() quando viene richiesto un 'count' troppo alto per kzalloc()

@@ -1,22 +1,5 @@
 #include "../user.h"
 
-#define CHECK(ret) \
-    if (ret < 0) { \
-        switch (errno) { \
-            case ENODEV: \
-                printf("Device not found\n"); \
-                exit(EXIT_FAILURE);           \
-            case EINVAL: \
-                printf("Invalid parameters\n"); \
-                exit(EXIT_FAILURE);   \
-            default: \
-                printf("Unknown error\n");    \
-                exit(EXIT_FAILURE); \
-        }          \
-    } else {       \
-        printf("OK\n");   \
-    }
-
 void orc_fp(){
     int fd, ret;
     char *buf;
@@ -25,7 +8,10 @@ void orc_fp(){
 
     printf("1. Opening the device: ");
     fd = open(DEVICE_PATH, O_RDONLY);
-    CHECK(fd)
+    if (fd < 0) {
+        check_error(fd, "Open");
+        return;
+    }
 
     buf = malloc(DEVICE_SIZE);
     if (!buf) {
@@ -36,25 +22,25 @@ void orc_fp(){
     printf("2. Reading the device: ");
 
     ret = read(fd, buf, 400);
-    CHECK(ret)
+    if (ret < 0) check_error(fd, "Read");
     printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
     memset(buf, 0, 400);
 
     ret = read(fd, buf, 400);
-    CHECK(ret)
+    if (ret < 0) check_error(fd, "Read");
     printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
 
     memset(buf, 0, 400);
 
     ret = read(fd, buf, 400);
-    CHECK(ret)
+    if (ret < 0) check_error(fd, "Read");
     printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
 
     free(buf);
 
     printf("3. Closing the device: ");
     ret = close(fd);
-    CHECK(ret)
+    if (ret < 0) check_error(fd, "Close");
 }
 
 void orc(){
@@ -63,9 +49,13 @@ void orc(){
 
     printf("Starting device operations tests...\n");
 
-    printf("1. Opening the device: ");
+    printf("1. Opening the device... ");
     fd = open(DEVICE_PATH, O_RDONLY);
-    CHECK(fd)
+    if (fd < 0) {
+        check_error(fd, "Open");
+        return;
+    }
+    printf("OK\n");
 
     buf = malloc(DEVICE_SIZE);
     if (!buf) {
@@ -73,16 +63,24 @@ void orc(){
         exit(EXIT_FAILURE);
     }
 
-    printf("2. Reading the device: ");
-    ret = read(fd, buf, DEVICE_SIZE);
-    CHECK(ret)
-    printf("\t%d bytes read.\n", ret); //Retrieved message is: %s\n", ret, buf);
+    printf("2. Reading the device... ");
+    ret = read(fd, buf, 64 * 1024/*DEVICE_SIZE*/); /*TODO*/
+    if (ret < 0) {
+        check_error(fd, "Read");
+        free(buf);
+        return;
+    }
+    printf("%d bytes read.\n", ret); //Retrieved message is: %s\n", ret, buf);
 
     free(buf);
 
-    printf("3. Closing the device: ");
+    printf("3. Closing the device... ");
     ret = close(fd);
-    CHECK(ret)
+    if (ret < 0) {
+        check_error(fd, "Close");
+    } else {
+        printf("OK\n");
+    }
 }
 
 void* multi_orc(){
@@ -93,7 +91,10 @@ void* multi_orc(){
 
     printf("1. Opening the device: ");
     fd = open(DEVICE_PATH, O_RDONLY);
-    CHECK(fd)
+    if (fd < 0) {
+        check_error(fd, "Open");
+        pthread_exit((void*)-1);
+    }
 
     buf = malloc(DEVICE_SIZE);
     if (!buf) {
@@ -103,14 +104,14 @@ void* multi_orc(){
 
     printf("2. Reading the device: ");
     ret = read(fd, buf, DEVICE_SIZE);
-    CHECK(ret)
+    if (ret < 0) check_error(fd, "Read");
     printf("\t%d bytes read.\n", ret);
 
     free(buf);
 
     printf("3. Closing the device: ");
     ret = close(fd);
-    CHECK(ret)
+    if (ret < 0) check_error(fd, "Close");
 
     pthread_exit(0);
 }

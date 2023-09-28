@@ -25,6 +25,8 @@ extern aos_fs_info_t *info;
 /**
  * Put into one free block of the block-device 'size' bytes of the test-space data identified by the 'source' pointer.
  * This operation must be executed all or nothing.
+ * When putting data, the operation of reporting data on the device can be either executed by the page-cache write back
+ * daemon of the Linux kernel or immediately (in a synchronous manner) depending on a compile-time choice.
  * @return offset of the device (the block index) where data have been put;
  *         ENOMEM, if there is currently no room available on the device.
  * */
