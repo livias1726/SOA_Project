@@ -62,14 +62,22 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int len, ret, nblocks, data_block_size, bytes_read, last_block;
+    int len, ret, data_block_size, bytes_read, last_block;
     bool is_last;
     unsigned int seq;
     char *msg, *block_msg;
-    loff_t b_idx, offset;
+    loff_t b_idx, offset, nblocks;
 
-    /* Check device counter validity */
-    if (!info->first) return 0;
+    /* Check device state validity: if 'first' is 0 (superblock index), the device is brand new and empty */
+    if (!info->first) return -ENODATA;
+
+    /* Retrieve device info */
+    aos_sb = info->sb;
+    nblocks = aos_sb.partition_size;
+    data_block_size = aos_sb.data_block_size;
+
+    /* If the offset was set at NBLOCKS, then EOF is reached */
+    if ((*f_pos >> 32) == nblocks) return 0;
 
     /* Check parameter validity */
     if (!count) return 0;
@@ -78,11 +86,6 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     /* Allocate memory */
     msg = kzalloc(count, GFP_KERNEL);
     if(!msg) return -ENOMEM;
-
-    /* Retrieve device info */
-    aos_sb = info->sb;
-    nblocks = aos_sb.partition_size;
-    data_block_size = aos_sb.data_block_size;
 
     /* Parse file pointer */
     if (*f_pos == 0) {
@@ -99,7 +102,6 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
            MODNAME, current->pid, b_idx, offset);
 
     bytes_read = 0;
-    is_last = false;
     while((bytes_read < count) && (!is_last)){
         is_last = (b_idx == last_block);
 
@@ -157,10 +159,15 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         b_idx = data_block.metadata.next;
     }
 
-    // set high 32 bits of f_pos to the current index i and low 32 bits of f_pos to the new offset count
-    *f_pos = (b_idx << 32) | offset;
     ret = (bytes_read > 0) ? copy_to_user(buf, msg, bytes_read) : 0;
     kfree(msg);
+
+    // set high 32 bits of f_pos to the current index i and low 32 bits of f_pos to the new offset count
+    if (is_last) {
+        *f_pos = (nblocks << 32);
+    } else {
+        *f_pos = (b_idx << 32) | offset;
+    }
 
     AUDIT { printk(KERN_INFO "%s: read operation by thread %d completed\n", MODNAME, current->pid); }
 

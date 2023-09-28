@@ -78,10 +78,8 @@ typedef struct aos_fs_info {
     uint64_t last;              /* Last valid block written chronologically */
     //---------------------------------------------------------------------------
     ulong *free_blocks;         /* Pointer to a bitmap to represent the counter of each data block */
-    // todo: see if writers flags can be handled better
     ulong *put_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
     ulong *inv_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
-    ulong inv_put_lock;      /* Change this atomically: this only needs 2 bits (1 for INV, 1 for PUT) */
     //------------------------------------------------------------------------
     seqlock_t *block_locks;
 } aos_fs_info_t;

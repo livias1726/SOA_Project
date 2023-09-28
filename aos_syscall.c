@@ -75,7 +75,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     /* Signal a pending PUT for possible INVALIDATION conflicts. 'first_put' will be 0 if this thread is the first
      * to execute the PUT in a concurrent execution */
-    first_put = !test_and_set_bit(PUT_BIT, &info->inv_put_lock);
+    first_put = !test_and_set_bit(PUT_BIT, info->put_map);
 
     /* ATOMICALLY update the last block to be written via 'last' variable.
      * The order in which this operation is performed is what will order concurrent PUT: the first to update
@@ -98,7 +98,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     clear_bit(block_index, info->put_map);
     if(first_put) {
         clear_bit(old_last, info->put_map);
-        clear_bit(PUT_BIT, &info->inv_put_lock);
+        clear_bit(PUT_BIT, info->put_map);
     }
 
     /* Release resources */
@@ -114,7 +114,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
         if(first_put) {
             clear_bit(old_last, info->put_map);
-            clear_bit(PUT_BIT, &info->inv_put_lock);
+            clear_bit(PUT_BIT, info->put_map);
         }
 
         clear_bit(block_index, info->put_map);
@@ -253,8 +253,8 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     }
 
     /* If the invalidation operates on 'last' block, it must wait for the PUT that is eventually
-        * currently operating on last. This is the PUT that firstly set the specific bit in 'inv_put_lock'. */
-    if (offset == info->last) { wait_on_bit(&info->inv_put_lock, PUT_BIT, TASK_INTERRUPTIBLE); }
+        * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
+    if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
 
     /* Read a block until no concurrent write is detected */
     do {

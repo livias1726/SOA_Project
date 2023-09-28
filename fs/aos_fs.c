@@ -26,7 +26,7 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
 
     int nblocks = aos_sb->partition_size;
     int longs = BITS_TO_LONGS(nblocks);     /* Number of unsigned longs needed to cover nblocks bits */
-    int i, bit = 0;
+    int i;
 
     /* Allocate bitmaps */
     info->free_blocks = kzalloc(longs * sizeof(long), GFP_KERNEL);
@@ -45,16 +45,8 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
         goto fail_3;
     }
 
-    /* TODO: read free map from superblock */
-    //__set_bit(0, info->free_blocks);
-    //__set_bit(1, info->free_blocks);
+    /* Restore state information from the Superblock */
     bitmap_or(info->free_blocks, info->free_blocks, aos_sb->padding, nblocks);
-
-    do {
-        printk(KERN_INFO "%s: bit %d is %d\n", MODNAME, bit, test_bit(bit, info->free_blocks));
-        bit++;
-    }while(bit < nblocks);
-
     info->first = aos_sb->first;
     info->last = aos_sb->last;
 
