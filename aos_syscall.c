@@ -143,7 +143,6 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
     int loaded_bytes, len, fail;
-    unsigned int seq;
     char * msg;
     size_t ret;
 
@@ -162,19 +161,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] started on block %llu\n", MODNAME, current->pid, offset); }
 
-        /* todo Read given block
-        do {
-            seq = read_seqbegin(&info->block_locks[offset]);
-            bh = sb_bread(info->vfs_sb, offset);
-            if(!bh) {
-                fail = -EIO;
-                goto failure;
-            }
-            // copy the data in another memory location to release the buffer head
-            memcpy(&data_block, bh->b_data, aos_sb.block_size);
-            brelse(bh);
-        } while (read_seqretry(&info->block_locks[offset], seq));*/
-
+    /* Read given block */
     bh = sb_bread(info->vfs_sb, offset);
     if(!bh) {
         fail = -EIO;
@@ -184,8 +171,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     memcpy(&data_block, bh->b_data, aos_sb.block_size);
     brelse(bh);
 
-    /* Check data validity: test with bit operations on free map is not atomic. This implementation ensure that
-     * data block remains the same after a read was successful according to the seqlock */
+    /* Check data validity */
     if (!data_block.metadata.is_valid) {
         fail = -ENODATA;
         goto failure;
@@ -232,7 +218,6 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    unsigned int seq;
     int fail, nblocks;
     uint64_t prev, next;
 
@@ -269,17 +254,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
     if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
 
-    /* todo Read a block until no concurrent write is detected
-    do {
-        seq = read_seqbegin(&info->block_locks[offset]);
-        bh = sb_bread(info->vfs_sb, offset);
-        if(!bh) {
-            fail = -EIO;
-            goto failure_2;
-        }
-        data_block = (struct aos_data_block*)bh->b_data;
-    } while (read_seqretry(&info->block_locks[offset], seq));*/
-
+    /* Get the block */
     bh = sb_bread(info->vfs_sb, offset);
     if(!bh) {
         fail = -EIO;
@@ -323,7 +298,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         if (fail < 0) goto failure_3;
     }
 
-    invalidate_block(offset, data_block, bh);
+    invalidate_block(data_block, bh);
 
     /* Finalize the invalidation: set invalid block as free to write on and release the bit in INV_MAP */
     clear_bit(offset, info->free_blocks);
