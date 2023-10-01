@@ -50,14 +50,14 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     info->first = aos_sb->first;
     info->last = aos_sb->last;
 
-    /* Init every seqlock associated to each block */
+    /* Init every seqlock associated to each block
     info->block_locks = kzalloc(nblocks * sizeof(seqlock_t), GFP_KERNEL);
     if (!info->block_locks) {
         printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate seqlocks\n", MODNAME);
         goto fail_4;
     }
 
-    for (i = 0; i < nblocks; ++i) { seqlock_init(&info->block_locks[i]); }
+    for (i = 0; i < nblocks; ++i) { seqlock_init(&info->block_locks[i]); } */
 
     info->vfs_sb->s_fs_info = info;
 
@@ -177,7 +177,7 @@ failure_2:
     kfree(info->free_blocks);
     kfree(info->put_map);
     kfree(info->inv_map);
-    kfree(info->block_locks);
+    //kfree(info->block_locks);
 failure_1:
     kfree(info);
     return fail;
@@ -199,7 +199,7 @@ static void aos_kill_superblock(struct super_block *sb){
     /* Read superblock */
     bh = sb_bread(sb, SUPER_BLOCK_IDX);
     if(!bh) {
-        printk(KERN_ALERT "%s: [aos_kill_super()] couldn't save info in the vfs superblock\n", MODNAME);
+        printk(KERN_ALERT "%s: [aos_kill_super()] couldn't save device info in the vfs superblock\n", MODNAME);
         goto failure;
     }
     aos_sb = (struct aos_super_block*)bh->b_data;
@@ -216,7 +216,7 @@ failure:
     kfree(info->free_blocks);
     kfree(info->put_map);
     kfree(info->inv_map);
-    kfree(info->block_locks);
+    //kfree(info->block_locks);
     kfree(info);
 
     kill_block_super(sb);

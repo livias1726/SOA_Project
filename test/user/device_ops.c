@@ -6,12 +6,13 @@ void orc_fp(){
 
     printf("Starting device operations tests...\n");
 
-    printf("1. Opening the device: ");
+    printf("1. Opening the device... ");
     fd = open(DEVICE_PATH, O_RDONLY);
     if (fd < 0) {
         check_error(fd, "Open");
         return;
     }
+    printf("OK\n");
 
     buf = malloc(DEVICE_SIZE);
     if (!buf) {
@@ -19,28 +20,27 @@ void orc_fp(){
         exit(EXIT_FAILURE);
     }
 
-    printf("2. Reading the device: ");
+    printf("2. Reading the device... ");
 
-    ret = read(fd, buf, 400);
-    if (ret < 0) check_error(fd, "Read");
-    printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
-    memset(buf, 0, 400);
+    for (int i = 0; i < 3; ++i) {
+        ret = read(fd, buf, 400);
+        if (ret < 0) {
+            check_error(fd, "Read");
+            goto fail;
+        }
+        printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
+    }
 
-    ret = read(fd, buf, 400);
-    if (ret < 0) check_error(fd, "Read");
-    printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
-
-    memset(buf, 0, 400);
-
-    ret = read(fd, buf, 400);
-    if (ret < 0) check_error(fd, "Read");
-    printf("\t%d bytes read. Retrieved message is: %s\n", ret, buf);
-
+fail:
     free(buf);
 
-    printf("3. Closing the device: ");
+    printf("3. Closing the device... ");
     ret = close(fd);
-    if (ret < 0) check_error(fd, "Close");
+    if (ret < 0) {
+        check_error(fd, "Close");
+    } else {
+        printf("OK\n");
+    }
 }
 
 void orc(){

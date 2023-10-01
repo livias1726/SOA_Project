@@ -23,7 +23,7 @@ int restore[HACKED_ENTRIES] = {[0 ... (HACKED_ENTRIES-1)] -1};
 extern aos_fs_info_t *info;
 
 /**
- * Put into one free block of the block-device 'size' bytes of the test-space data identified by the 'source' pointer.
+ * Put into one free block of the block-device 'size' bytes of the user-space data identified by the 'source' pointer.
  * This operation must be executed all or nothing.
  * When putting data, the operation of reporting data on the device can be either executed by the page-cache write back
  * daemon of the Linux kernel or immediately (in a synchronous manner) depending on a compile-time choice.
@@ -160,18 +160,29 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
         goto failure;
     }
 
-    /* Read given block */
-    do {
-        seq = read_seqbegin(&info->block_locks[offset]);
-        bh = sb_bread(info->vfs_sb, offset);
-        if(!bh) {
-            fail = -EIO;
-            goto failure;
-        }
-        // copy the data in another memory location to release the buffer head
-        memcpy(&data_block, bh->b_data, aos_sb.block_size);
-        brelse(bh);
-    } while (read_seqretry(&info->block_locks[offset], seq));
+    DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] started on block %llu\n", MODNAME, current->pid, offset); }
+
+        /* todo Read given block
+        do {
+            seq = read_seqbegin(&info->block_locks[offset]);
+            bh = sb_bread(info->vfs_sb, offset);
+            if(!bh) {
+                fail = -EIO;
+                goto failure;
+            }
+            // copy the data in another memory location to release the buffer head
+            memcpy(&data_block, bh->b_data, aos_sb.block_size);
+            brelse(bh);
+        } while (read_seqretry(&info->block_locks[offset], seq));*/
+
+    bh = sb_bread(info->vfs_sb, offset);
+    if(!bh) {
+        fail = -EIO;
+        goto failure;
+    }
+    // copy the data in another memory location to release the buffer head
+    memcpy(&data_block, bh->b_data, aos_sb.block_size);
+    brelse(bh);
 
     /* Check data validity: test with bit operations on free map is not atomic. This implementation ensure that
      * data block remains the same after a read was successful according to the seqlock */
@@ -258,7 +269,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
     if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
 
-    /* Read a block until no concurrent write is detected */
+    /* todo Read a block until no concurrent write is detected
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
         bh = sb_bread(info->vfs_sb, offset);
@@ -267,7 +278,14 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
             goto failure_2;
         }
         data_block = (struct aos_data_block*)bh->b_data;
-    } while (read_seqretry(&info->block_locks[offset], seq));
+    } while (read_seqretry(&info->block_locks[offset], seq));*/
+
+    bh = sb_bread(info->vfs_sb, offset);
+    if(!bh) {
+        fail = -EIO;
+        goto failure_2;
+    }
+    data_block = (struct aos_data_block*)bh->b_data;
 
     /* Wait on bits 'prev' and 'next' in INV_MAP to keep going. Avoid conflicts between concurrent invalidations.
      * To avoid possible deadlocks between invalidations (which has to lock 3 blocks to execute), the wait is

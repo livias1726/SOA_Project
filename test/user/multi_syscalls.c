@@ -24,9 +24,9 @@ void* multi_put_data(void *arg){
 void* multi_get_data(void *arg) {
     int ret, tid = *(int*)arg;
 
-    char msg[SIZE_LOREM];
+    char msg[SIZE_LUCIFER];
 
-    ret = syscall(get, (tid%NBLOCKS)+2, msg, SIZE_LOREM);
+    ret = syscall(get, (tid%NBLOCKS)+2, msg, SIZE_LUCIFER);
     if(ret < 0) {
         check_error(tid, "GET");
         pthread_exit((void*)-1);

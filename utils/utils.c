@@ -19,10 +19,10 @@ static int change_block_prev(int blk, int prev_blk){
     if (!bh_next) return -EIO;
     next_block = (struct aos_data_block*)bh_next->b_data;
 
-    write_seqlock(&info->block_locks[blk]);
+    //write_seqlock(&info->block_locks[blk]);
     next_block->metadata.prev = prev_blk;
     mark_buffer_dirty(bh_next);
-    write_sequnlock(&info->block_locks[blk]);
+    //write_sequnlock(&info->block_locks[blk]);
     brelse(bh_next);
 
     return 0;
@@ -42,10 +42,10 @@ static int change_block_next(int blk, int next_blk){
     if(!bh_prev) return -EIO;
     prev_block = (struct aos_data_block*)bh_prev->b_data;
 
-    write_seqlock(&info->block_locks[blk]);
+    //write_seqlock(&info->block_locks[blk]);
     prev_block->metadata.next = next_blk;
     mark_buffer_dirty(bh_prev);
-    write_sequnlock(&info->block_locks[blk]);
+    //write_sequnlock(&info->block_locks[blk]);
     brelse(bh_prev);
 
     return 0;
@@ -76,16 +76,16 @@ int change_blocks_metadata(int prev_blk, int next_blk){
     if (!bh_next) return -EIO;
     next_block = (struct aos_data_block*)bh_next->b_data;
 
-    write_seqlock(&info->block_locks[prev_blk]);
+    //write_seqlock(&info->block_locks[prev_blk]);
     prev_block->metadata.next = next_blk;
     mark_buffer_dirty(bh_prev);
-    write_sequnlock(&info->block_locks[prev_blk]);
+    //write_sequnlock(&info->block_locks[prev_blk]);
     brelse(bh_prev);
 
-    write_seqlock(&info->block_locks[next_blk]);
+    //write_seqlock(&info->block_locks[next_blk]);
     next_block->metadata.prev = prev_blk;
     mark_buffer_dirty(bh_next);
-    write_sequnlock(&info->block_locks[next_blk]);
+    //write_sequnlock(&info->block_locks[next_blk]);
     brelse(bh_next);
 
     return 0;
@@ -94,12 +94,6 @@ int change_blocks_metadata(int prev_blk, int next_blk){
 /**
  * Inserts a new message in the given block, updating its metadata
  * */
-/* noteme: When more than one thread is allowed to write on the same block
-    * it always happens on different data/metadata, so that writers can operate concurrently.
-    * There's no need for each writer to call write_seqlock as this will block each operation uselessly.
-    * To get the write_lock on the block and release it, it is used a counter variable:
-    * - If the variable was 0 before increasing its value, take the write_lock.
-    * - If the variable becomes 0 after decreasing its value, release the write_lock. */
 int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
     struct buffer_head *bh;
     struct aos_data_block *data_block;
@@ -125,7 +119,7 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
     /* Effective changes in the data block will be done after eventual 'change_next_block()' is successful
      * to avoid needing to abort the operation. */
 
-    write_seqlock(&info->block_locks[blk]); // the first to operate on the block takes the write lock
+    //write_seqlock(&info->block_locks[blk]); // the first to operate on the block takes the write lock
 
     // Write block on device
     ret = copy_from_user(data_block->data.msg, source, size);
@@ -136,7 +130,7 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
 
     mark_buffer_dirty(bh);
     WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
-    write_sequnlock(&info->block_locks[blk]);
+    //write_sequnlock(&info->block_locks[blk]);
 
     res = size;
 
@@ -158,7 +152,7 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
  * */
 void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
 
-    write_seqlock(&info->block_locks[blk]);
+    //write_seqlock(&info->block_locks[blk]);
 
     /* Change the block's metadata */
     /*
@@ -168,7 +162,7 @@ void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_
     data_block->metadata.is_valid = 0;
 
     mark_buffer_dirty(bh);
-    write_sequnlock(&info->block_locks[blk]);
+    //write_sequnlock(&info->block_locks[blk]);
 
     brelse(bh);
 }
