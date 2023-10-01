@@ -22,16 +22,17 @@ void* multi_put_data(void *arg){
 }
 
 void* multi_get_data(void *arg) {
-    int ret, tid = *(int*)arg;
+    int ret, tid = *(int*)arg, block;
 
     char msg[SIZE_LUCIFER];
 
-    ret = syscall(get, (tid%NBLOCKS)+2, msg, SIZE_LUCIFER);
+    block = (tid%NBLOCKS)+2;
+    ret = syscall(get, block, msg, SIZE_LUCIFER);
     if(ret < 0) {
         check_error(tid, "GET");
         pthread_exit((void*)-1);
     } else {
-        printf("[%d] - GET from %d (%.*s)\n", tid, (tid%NBLOCKS)+2, 10, msg);
+        printf("[%d] - GET from %d (%.*s)\n", tid, block, 10, msg);
         pthread_exit(0);
     }
 }
@@ -39,17 +40,12 @@ void* multi_get_data(void *arg) {
 void* multi_invalidate_data(void *arg){
     int ret, tid = *(int*)arg, block;
 
-    block = (rand()%NBLOCKS)+2; //(tid%NBLOCKS)+2;
+    block = (tid%NBLOCKS)+2;
 
-retry:
     ret = syscall(inv, block);
     if(ret < 0) {
         check_error(tid, "INV");
-        if (errno == EAGAIN) {
-            printf("[%d] - INV on %d RETRY\n", tid, block);
-            sleep(1);
-            goto retry;
-        }
+        if (errno == EAGAIN) printf("[%d] - INV on %d RETRY\n", tid, block);
         pthread_exit((void*)-1);
     } else {
         printf("[%d] - INV on %d\n", tid, block);

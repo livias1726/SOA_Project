@@ -155,15 +155,16 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     /* Check input parameters */
     aos_sb = info->sb;
-    if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.data_block_size) {
+    if (offset < 2 || offset >= aos_sb.partition_size || size < 0 || size > aos_sb.data_block_size) {
         fail = -EINVAL;
         goto failure;
     }
 
-    DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] started on block %llu\n", MODNAME, current->pid, offset); }
+    DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] Started on block %llu\n", MODNAME, current->pid, offset); }
 
     /* Read given block */
     do {
+        DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] Try read block %llu\n", MODNAME, current->pid, offset); }
         seq = read_seqbegin(&info->block_locks[offset]);
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
@@ -200,16 +201,18 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     __sync_fetch_and_sub(&info->counter, 1);
     wake_up_interruptible(&wq);
 
-    AUDIT { printk(KERN_INFO "%s: [get_data()] successful - read %d bytes in block %llu\n", MODNAME, loaded_bytes, offset); }
+    AUDIT { printk(KERN_INFO "%s: [get_data() - %d] Read %d bytes in block %llu\n",
+                   MODNAME, current->pid, loaded_bytes, offset); }
     return loaded_bytes;
 
-    failure:
-        __sync_fetch_and_sub(&info->counter, 1);
-        wake_up_interruptible(&wq);
+failure:
+    __sync_fetch_and_sub(&info->counter, 1);
+    wake_up_interruptible(&wq);
 
-        AUDIT { printk(KERN_INFO "%s: [get_data()] on block %llu failed with error %d\n", MODNAME, offset, fail); }
+    AUDIT { printk(KERN_INFO "%s: [get_data() - %d] Get on block %llu failed with error %d\n",
+                   MODNAME, current->pid, offset, fail); }
 
-        return fail;
+    return fail;
 }
 
 /**

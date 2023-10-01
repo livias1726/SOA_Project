@@ -177,7 +177,7 @@ failure_2:
     kfree(info->free_blocks);
     kfree(info->put_map);
     kfree(info->inv_map);
-    //kfree(info->block_locks);
+    kfree(info->block_locks);
 failure_1:
     kfree(info);
     return fail;
@@ -216,7 +216,7 @@ failure:
     kfree(info->free_blocks);
     kfree(info->put_map);
     kfree(info->inv_map);
-    //kfree(info->block_locks);
+    kfree(info->block_locks);
     kfree(info);
 
     kill_block_super(sb);
