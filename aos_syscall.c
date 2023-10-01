@@ -162,27 +162,18 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] started on block %llu\n", MODNAME, current->pid, offset); }
 
-        /* todo Read given block
-        do {
-            seq = read_seqbegin(&info->block_locks[offset]);
-            bh = sb_bread(info->vfs_sb, offset);
-            if(!bh) {
-                fail = -EIO;
-                goto failure;
-            }
-            // copy the data in another memory location to release the buffer head
-            memcpy(&data_block, bh->b_data, aos_sb.block_size);
-            brelse(bh);
-        } while (read_seqretry(&info->block_locks[offset], seq));*/
-
-    bh = sb_bread(info->vfs_sb, offset);
-    if(!bh) {
-        fail = -EIO;
-        goto failure;
-    }
-    // copy the data in another memory location to release the buffer head
-    memcpy(&data_block, bh->b_data, aos_sb.block_size);
-    brelse(bh);
+    /* Read given block */
+    do {
+        seq = read_seqbegin(&info->block_locks[offset]);
+        bh = sb_bread(info->vfs_sb, offset);
+        if(!bh) {
+            fail = -EIO;
+            goto failure;
+        }
+        // copy the data in another memory location to release the buffer head
+        memcpy(&data_block, bh->b_data, aos_sb.block_size);
+        brelse(bh);
+    } while (read_seqretry(&info->block_locks[offset], seq));
 
     /* Check data validity: test with bit operations on free map is not atomic. This implementation ensure that
      * data block remains the same after a read was successful according to the seqlock */
@@ -269,7 +260,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
     if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
 
-    /* todo Read a block until no concurrent write is detected
+    /* Read a block until no concurrent write is detected */
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
         bh = sb_bread(info->vfs_sb, offset);
@@ -278,14 +269,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
             goto failure_2;
         }
         data_block = (struct aos_data_block*)bh->b_data;
-    } while (read_seqretry(&info->block_locks[offset], seq));*/
-
-    bh = sb_bread(info->vfs_sb, offset);
-    if(!bh) {
-        fail = -EIO;
-        goto failure_2;
-    }
-    data_block = (struct aos_data_block*)bh->b_data;
+    } while (read_seqretry(&info->block_locks[offset], seq));
 
     /* Wait on bits 'prev' and 'next' in INV_MAP to keep going. Avoid conflicts between concurrent invalidations.
      * To avoid possible deadlocks between invalidations (which has to lock 3 blocks to execute), the wait is

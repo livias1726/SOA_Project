@@ -104,7 +104,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     while((bytes_read < count) && (!is_last)){
         is_last = (b_idx == last_block);
 
-        /* todo Read data block into a local variable
+        /* Read data block into a local variable */
         do {
             seq = read_seqbegin(&info->block_locks[b_idx]);
             bh = sb_bread(info->vfs_sb, b_idx);
@@ -114,15 +114,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
             }
             memcpy(&data_block, bh->b_data, data_block_size);
             brelse(bh);
-        } while (read_seqretry(&info->block_locks[b_idx], seq));*/
-
-        bh = sb_bread(info->vfs_sb, b_idx);
-        if(!bh) {
-            kfree(msg);
-            return -EIO;
-        }
-        memcpy(&data_block, bh->b_data, data_block_size);
-        brelse(bh);
+        } while (read_seqretry(&info->block_locks[b_idx], seq));
 
         /* Check data validity: invalidation could happen while reading the block.
          * This ensures that a writing on the block is always detected, even if the read is already executing. */
