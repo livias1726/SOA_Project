@@ -131,6 +131,7 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
 void invalidate_block(struct aos_data_block *data_block, struct buffer_head *bh){
     data_block->metadata.is_valid = 0;
     mark_buffer_dirty(bh);
+    sync_dirty_buffer(bh);
     brelse(bh);
 }
 

@@ -75,18 +75,14 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     /* Signal a pending PUT for possible INVALIDATION conflicts. 'first_put' will be 0 if this thread is the first
      * to execute the PUT in a concurrent execution */
-    first_put = !test_and_set_bit(PUT_BIT, info->put_map);
+    first_put = !test_and_set_bit(0, info->put_map);
 
-    /* ATOMICALLY update the last block to be written via 'last' variable.
-     * The order in which this operation is performed is what will order concurrent PUT: the first to update
-     * this value will be the first to write a new block chronologically (change metadata in the previous block['last'])
-     * and update new block metadata accordingly.
-     * */
+    /* Update the last block. The order in which this operation is performed will be the order of concurrent PUT */
     old_last = __atomic_exchange_n(&info->last, block_index, __ATOMIC_SEQ_CST);
 
-    /* Signal a pending PUT on last to avoid conflicting with an INV that comes after the above change.
-     * It doesn't matter if another PUT has already set this .*/
-    if (first_put) set_bit(old_last, info->put_map);
+    /* Signal a pending PUT on last to avoid conflicting with an INV that comes after the update of 'last'.
+     * It doesn't matter if another PUT has already set this.*/
+    //if (first_put) set_bit(1, info->put_map);
 
     DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'last' from %llu to %llu. \n",
                    MODNAME, current->pid, old_last, block_index); }
@@ -96,11 +92,10 @@ asmlinkage int sys_put_data(char * source, size_t size){
     if (fail < 0) goto failure_2;
 
     /* Signal completion of PUT operation on given block */
-        set_bit(block_index, info->free_blocks);
     clear_bit(block_index, info->put_map);
     if(first_put) {
-        clear_bit(old_last, info->put_map);
-        wake_on_bit(info->put_map, PUT_BIT)
+        //wake_on_bit(info->put_map, 1)
+        wake_on_bit(info->put_map, 0)
     }
 
     /* Release resources */
@@ -115,8 +110,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
         __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' (if no thread has changed it)
 
         if(first_put) {
-            clear_bit(old_last, info->put_map);
-            wake_on_bit(info->put_map, PUT_BIT)
+            //wake_on_bit(info->put_map, 1)
+            wake_on_bit(info->put_map, 0)
         }
 
         clear_bit(block_index, info->put_map);
@@ -245,14 +240,19 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     /* Check current pending PUT on the same block: if a PUT is pending on the block it means that the block
      * has currently no valid data associated yet. This falls into the case of ENODATA error. */
-    if (test_bit(offset, info->put_map) || !test_bit(offset, info->free_blocks)) {
+    if (/*test_bit(offset, info->put_map) ||*/ !test_bit(offset, info->free_blocks)) {
         fail = -ENODATA;
         goto failure_2;
     }
 
     /* If the invalidation operates on 'last' block, it must wait for the PUT that is eventually
-     * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
-    if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
+     * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'.
+    if (offset == info->last) {
+        wait_on_bit(info->put_map, 0, TASK_INTERRUPTIBLE);
+    } else {
+        wait_on_bit(info->put_map, 1, TASK_INTERRUPTIBLE);
+    }*/
+    wait_on_bit(info->put_map, 0, TASK_INTERRUPTIBLE);
 
     /* Get the block */
     bh = sb_bread(info->vfs_sb, offset);

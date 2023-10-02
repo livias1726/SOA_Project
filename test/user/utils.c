@@ -1,5 +1,10 @@
 #include "../user.h"
 
+pthread_barrier_t barrier;
+int put;
+int get;
+int inv;
+
 int getint(){
     int i = 0;
     char s[MAX_IN], c;
