@@ -40,7 +40,7 @@ void* multi_get_data(void *arg) {
 void* multi_invalidate_data(void *arg){
     int ret, tid = *(int*)arg, block;
 
-    block = (tid%NBLOCKS)+2;
+    block = (rand()%NBLOCKS)+2; //(tid%NBLOCKS)+2;
 
     ret = syscall(inv, block);
     if(ret < 0) {

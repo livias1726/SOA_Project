@@ -144,6 +144,7 @@ void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_
     write_seqlock(&info->block_locks[blk]);
     data_block->metadata.is_valid = 0;
     mark_buffer_dirty(bh);
+    sync_dirty_buffer(bh);
     write_sequnlock(&info->block_locks[blk]);
 
     brelse(bh);
