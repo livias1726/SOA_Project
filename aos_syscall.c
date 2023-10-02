@@ -53,7 +53,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
         goto failure_1;
     }
 
-    /* Read bitmap to find a free block */
+    /* Read bitmap to find a free block. Test and set: if a concurrent PUT retrieved the same block index, only
+     * the first one to set the bit will be able to use it. The other one will try to find a new free block */
     nblocks = aos_sb.partition_size;
     do {
         block_index = find_first_zero_bit(info->free_blocks, nblocks);
@@ -61,18 +62,15 @@ asmlinkage int sys_put_data(char * source, size_t size){
             fail = -ENOMEM;
             goto failure_1;
         }
-    /* ATOMICALLY test and set the bit of the free block: if a concurrent PUT retrieved the same block index, only
-     * the first one to set the bit will be able to use it. The other one will try to find a new free block */
     } while (test_and_set_bit(block_index, info->free_blocks));
 
     DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Started on block %llu\n", MODNAME, current->pid, block_index); }
 
-    /* Signal a pending PUT on selected block.
-     * This cannot cause conflicts with other PUT operations thanks to the above loop.*/
+    /* Signal a pending PUT on selected block. This cannot cause conflicts
+     * with other PUT operations thanks to the above loop. */
     set_bit(block_index, info->put_map);
 
-    /* Wait for the completion of an eventual INVALIDATION on 'last':
-     * that's the only conflict that can happen between INV and PUT. */
+    /* Wait for the completion of an eventual INVALIDATION on 'last'. */
     wait_on_bit(info->inv_map, info->last, TASK_INTERRUPTIBLE);
 
     /* Signal a pending PUT for possible INVALIDATION conflicts. 'first_put' will be 0 if this thread is the first
@@ -85,6 +83,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
      * and update new block metadata accordingly.
      * */
     old_last = __atomic_exchange_n(&info->last, block_index, __ATOMIC_SEQ_CST);
+
     /* Signal a pending PUT on last to avoid conflicting with an INV that comes after the above change.
      * It doesn't matter if another PUT has already set this .*/
     if (first_put) set_bit(old_last, info->put_map);
@@ -97,10 +96,11 @@ asmlinkage int sys_put_data(char * source, size_t size){
     if (fail < 0) goto failure_2;
 
     /* Signal completion of PUT operation on given block */
+        set_bit(block_index, info->free_blocks);
     clear_bit(block_index, info->put_map);
     if(first_put) {
         clear_bit(old_last, info->put_map);
-        clear_bit(PUT_BIT, info->put_map);
+        wake_on_bit(info->put_map, PUT_BIT)
     }
 
     /* Release resources */
@@ -116,7 +116,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
         if(first_put) {
             clear_bit(old_last, info->put_map);
-            clear_bit(PUT_BIT, info->put_map);
+            wake_on_bit(info->put_map, PUT_BIT)
         }
 
         clear_bit(block_index, info->put_map);
@@ -251,7 +251,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     }
 
     /* If the invalidation operates on 'last' block, it must wait for the PUT that is eventually
-        * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
+     * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
     if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
 
     /* Get the block */
@@ -302,7 +302,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     /* Finalize the invalidation: set invalid block as free to write on and release the bit in INV_MAP */
     clear_bit(offset, info->free_blocks);
-    clear_bit(offset, info->inv_map);
+    wake_on_bit(info->inv_map, offset)
 
     /* Release resources */
     __sync_fetch_and_sub(&info->counter, 1);
@@ -318,7 +318,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     failure_3:
         brelse(bh);
     failure_2:
-        clear_bit(offset, info->inv_map);
+        wake_on_bit(info->inv_map, offset)
     failure_1:
         __sync_fetch_and_sub(&info->counter, 1);
         wake_up_interruptible(&wq);
