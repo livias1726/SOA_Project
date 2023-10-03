@@ -178,3 +178,6 @@ void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_
     brelse(bh);
 }
 
+int wait_for_invalidation(){
+
+}

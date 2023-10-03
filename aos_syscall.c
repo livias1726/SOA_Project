@@ -272,43 +272,53 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     bh = sb_bread(info->vfs_sb, offset);
     if(!bh) {
         fail = -EIO;
+        write_sequnlock(&info->block_locks[offset]);
         goto failure_2;
     }
     data_block = (struct aos_data_block*)bh->b_data;
+
+    prev = data_block->metadata.prev;
+    next = data_block->metadata.next;
 
     /* Avoid conflicts between concurrent invalidations. Possible deadlocks.
     fail = wait_inv(info->inv_map, data_block->metadata.prev);
     if (fail < 0) goto failure_3;
     fail = wait_inv(info->inv_map, data_block->metadata.next);
     if (fail < 0) goto failure_3;*/
+    if (test_and_set_bit(prev, info->inv_map)) {
+        fail = -EAGAIN;
+        goto failure_3;
+    }
 
-    prev = data_block->metadata.prev;
-    next = data_block->metadata.next;
+    if (test_and_set_bit(next, info->inv_map)) {
+        fail = -EAGAIN;
+        clear_bit(prev, info->inv_map);
+        goto failure_3;
+    }
 
     if (__sync_bool_compare_and_swap(&info->first, offset, next)) { // If 'offset' is 'first', change 'first' to 'next'
-        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Atomically swapped 'first' from %u to %llu. \n",
-                       MODNAME, current->pid, offset, next); }
         if(!__sync_bool_compare_and_swap(&info->last, offset, 1)) { // If 'offset' is 'first' AND 'last', change 'last' to 1
             /* Set 1 as 'prev' of the next block */
             fail = change_blocks_metadata(1, next);
             if (fail < 0) goto failure_4;
-        } else {
-            DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Atomically swapped 'last' from %u to %d. \n",
-                           MODNAME, current->pid, offset, 1); }
         }
     } else if (__sync_bool_compare_and_swap(&info->last, offset, prev)) { // If 'offset' is 'last', change 'last' to 'prev'
-        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Atomically swapped 'last' from %u to %llu. \n",
-                       MODNAME, current->pid, offset, prev); }
         /* Set 0 as 'next' of the previous block */
         fail = change_blocks_metadata(prev, 0);
         if (fail < 0) goto failure_4;
     } else {
         /* Write new 'prev' and 'next' on blocks */
         fail = change_blocks_metadata(prev, next);
-        if (fail < 0) goto failure_3;
+        if (fail < 0) {
+            clear_bit(next, info->inv_map);
+            goto failure_3;
+        }
     }
 
     invalidate_block(offset, data_block, bh);
+
+    clear_bit(prev, info->inv_map);
+    clear_bit(next, info->inv_map);
 
     write_sequnlock(&info->block_locks[offset]);
 
@@ -327,8 +337,11 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     failure_4:
         __sync_bool_compare_and_swap(&info->last, prev, offset); // if last was changed into prev, reset it
         __sync_bool_compare_and_swap(&info->first, next, offset); // if first was changed into next, reset it
+        clear_bit(next, info->inv_map);
     failure_3:
         brelse(bh);
+        clear_bit(prev, info->inv_map);
+        write_sequnlock(&info->block_locks[offset]);
     failure_2:
         wake_on_bit(info->inv_map, offset)
     failure_1:
