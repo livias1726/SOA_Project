@@ -259,6 +259,12 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     }
     data_block = (struct aos_data_block*)bh->b_data;
 
+    /* Check data validity */
+    if (!data_block->metadata.is_valid) {
+        fail = -ENODATA;
+        goto failure_2;
+    }
+
     /* Wait on bits 'prev' and 'next' in INV_MAP to keep going. Avoid conflicts between concurrent invalidations.
      * To avoid possible deadlocks between invalidations (which has to lock 3 blocks to execute), the wait is
      * temporized: invalidations can abort and return with EAGAIN to retry the operation. If the block is 'first'
