@@ -256,7 +256,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
     if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
 
-    /* Read a block until no concurrent write is detected */
+    /* Read a block until no concurrent write is detected
     do {
         seq = read_seqbegin(&info->block_locks[offset]);
         bh = sb_bread(info->vfs_sb, offset);
@@ -265,17 +265,22 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
             goto failure_2;
         }
         data_block = (struct aos_data_block*)bh->b_data;
-    } while (read_seqretry(&info->block_locks[offset], seq));
+    } while (read_seqretry(&info->block_locks[offset], seq));*/
 
-    /* Wait on bits 'prev' and 'next' in INV_MAP to keep going. Avoid conflicts between concurrent invalidations.
-     * To avoid possible deadlocks between invalidations (which has to lock 3 blocks to execute), the wait is
-     * temporized: invalidations can abort and return with EAGAIN to retry the operation. If the block is 'first'
-     * or 'last', one of these two wait is useless logically, but needed for implementations concerns, such as calling
-     * the following atomic operations without conflict. */
+    write_seqlock(&info->block_locks[offset]);
+
+    bh = sb_bread(info->vfs_sb, offset);
+    if(!bh) {
+        fail = -EIO;
+        goto failure_2;
+    }
+    data_block = (struct aos_data_block*)bh->b_data;
+
+    /* Avoid conflicts between concurrent invalidations. Possible deadlocks.
     fail = wait_inv(info->inv_map, data_block->metadata.prev);
     if (fail < 0) goto failure_3;
     fail = wait_inv(info->inv_map, data_block->metadata.next);
-    if (fail < 0) goto failure_3;
+    if (fail < 0) goto failure_3;*/
 
     prev = data_block->metadata.prev;
     next = data_block->metadata.next;
@@ -304,6 +309,8 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     }
 
     invalidate_block(offset, data_block, bh);
+
+    write_sequnlock(&info->block_locks[offset]);
 
     /* Finalize the invalidation: set invalid block as free to write on and release the bit in INV_MAP */
     clear_bit(offset, info->free_blocks);

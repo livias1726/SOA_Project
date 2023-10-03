@@ -14,18 +14,25 @@ extern aos_fs_info_t *info;
 static int change_block_prev(int blk, int prev_blk){
     struct buffer_head *bh_next;
     struct aos_data_block *next_block;
-
-    bh_next = sb_bread(info->vfs_sb, blk);
-    if (!bh_next) return -EIO;
-    next_block = (struct aos_data_block*)bh_next->b_data;
+    int fail = 0;
 
     write_seqlock(&info->block_locks[blk]);
+
+    bh_next = sb_bread(info->vfs_sb, blk);
+    if (!bh_next) {
+        fail = -EIO;
+        goto failure;
+    }
+    next_block = (struct aos_data_block*)bh_next->b_data;
+
     next_block->metadata.prev = prev_blk;
+
     mark_buffer_dirty(bh_next);
-    write_sequnlock(&info->block_locks[blk]);
     brelse(bh_next);
 
-    return 0;
+failure:
+    write_sequnlock(&info->block_locks[blk]);
+    return fail;
 }
 
 /*
@@ -37,18 +44,25 @@ static int change_block_prev(int blk, int prev_blk){
 static int change_block_next(int blk, int next_blk){
     struct buffer_head *bh_prev;
     struct aos_data_block *prev_block;
-
-    bh_prev = sb_bread(info->vfs_sb, blk);
-    if(!bh_prev) return -EIO;
-    prev_block = (struct aos_data_block*)bh_prev->b_data;
+    int fail = 0;
 
     write_seqlock(&info->block_locks[blk]);
+
+    bh_prev = sb_bread(info->vfs_sb, blk);
+    if(!bh_prev) {
+        fail = -EIO;
+        goto failure;
+    }
+    prev_block = (struct aos_data_block*)bh_prev->b_data;
+
     prev_block->metadata.next = next_blk;
+
     mark_buffer_dirty(bh_prev);
-    write_sequnlock(&info->block_locks[blk]);
     brelse(bh_prev);
 
-    return 0;
+failure:
+    write_sequnlock(&info->block_locks[blk]);
+    return fail;
 }
 
 /*
@@ -58,7 +72,7 @@ static int change_block_next(int blk, int next_blk){
 int change_blocks_metadata(int prev_blk, int next_blk){
     struct buffer_head *bh_next, *bh_prev;
     struct aos_data_block *next_block, *prev_block;
-    int fail;
+    int fail = 0;
 
     if (prev_blk == 1) {
         fail = change_block_prev(next_blk, 1);
@@ -68,27 +82,40 @@ int change_blocks_metadata(int prev_blk, int next_blk){
         return fail;
     }
 
+    /* PREV */
+    write_seqlock(&info->block_locks[prev_blk]);
+
     bh_prev = sb_bread(info->vfs_sb, prev_blk);
-    if(!bh_prev) return -EIO;
+    if(!bh_prev) {
+        fail = -EIO;
+        goto failure_1;
+    }
     prev_block = (struct aos_data_block*)bh_prev->b_data;
 
+    /* NEXT */
+    write_seqlock(&info->block_locks[next_blk]);
+
     bh_next = sb_bread(info->vfs_sb, next_blk);
-    if (!bh_next) return -EIO;
+    if (!bh_next) {
+        fail = -EIO;
+        goto failure_2;
+    }
     next_block = (struct aos_data_block*)bh_next->b_data;
 
-    write_seqlock(&info->block_locks[prev_blk]);
-    prev_block->metadata.next = next_blk;
-    mark_buffer_dirty(bh_prev);
-    write_sequnlock(&info->block_locks[prev_blk]);
-    brelse(bh_prev);
-
-    write_seqlock(&info->block_locks[next_blk]);
     next_block->metadata.prev = prev_blk;
+    prev_block->metadata.next = next_blk;
+
+    mark_buffer_dirty(bh_prev);
     mark_buffer_dirty(bh_next);
-    write_sequnlock(&info->block_locks[next_blk]);
+
+    brelse(bh_prev);
     brelse(bh_next);
 
-    return 0;
+    failure_2:
+        write_sequnlock(&info->block_locks[next_blk]);
+    failure_1:
+        write_sequnlock(&info->block_locks[prev_blk]);
+        return fail;
 }
 
 /**
@@ -100,8 +127,13 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
     int res;
     size_t ret;
 
+    write_seqlock(&info->block_locks[blk]);
+
     bh = sb_bread(info->vfs_sb, blk);
-    if(!bh) return -EIO;
+    if(!bh) {
+        res = -EIO;
+        goto failure_1;
+    }
     data_block = (struct aos_data_block*)bh->b_data;
 
     /* If the block is the first to be written (prev is 1), then there's no need to update the previous one
@@ -113,13 +145,8 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
     } else{
         /* Writes on the 'next' metadata of the previous block (old_last) */
         res = change_block_next(prev, blk);
-        if (res < 0) goto failure;
+        if (res < 0) goto failure_2;
     }
-
-    /* Effective changes in the data block will be done after eventual 'change_next_block()' is successful
-     * to avoid needing to abort the operation. */
-
-    write_seqlock(&info->block_locks[blk]); // the first to operate on the block takes the write lock
 
     // Write block on device
     ret = copy_from_user(data_block->data.msg, source, size);
@@ -130,22 +157,23 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
 
     mark_buffer_dirty(bh);
     WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
-    write_sequnlock(&info->block_locks[blk]);
 
     res = size;
 
-    failure:
+    failure_2:
         brelse(bh);
+    failure_1:
+        write_sequnlock(&info->block_locks[blk]);
         return res;
 }
 
 void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
 
-    write_seqlock(&info->block_locks[blk]);
+    //write_seqlock(&info->block_locks[blk]);
     data_block->metadata.is_valid = 0;
     mark_buffer_dirty(bh);
     sync_dirty_buffer(bh);
-    write_sequnlock(&info->block_locks[blk]);
+    //write_sequnlock(&info->block_locks[blk]);
 
     brelse(bh);
 }
