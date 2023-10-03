@@ -78,7 +78,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     /* Signal a pending PUT for possible INVALIDATION conflicts. 'first_put' will be 0 if this thread is the first
      * to execute the PUT in a concurrent execution */
-    //first_put = !test_and_set_bit(0, info->put_map);
+    first_put = !test_and_set_bit(PUT_BIT, info->put_map);
 
     DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'last' from %llu to %llu. \n",
                    MODNAME, current->pid, old_last, block_index); }
@@ -89,12 +89,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     /* Signal completion of PUT operation on given block */
     clear_bit(block_index, info->put_map);
-    /*
-    if(first_put) {
-        //wake_on_bit(info->put_map, 1)
-        clear_bit(old_last, info->put_map);
-        wake_on_bit(info->put_map, 0)
-    }*/
+    if(first_put) wake_on_bit(info->put_map, 0)
 
     /* Release resources */
     __sync_fetch_and_sub(&info->counter, 1);
@@ -106,13 +101,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
     failure_2:
         __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first'
         __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' (if no thread has changed it)
-/*
-        if(first_put) {
-            //wake_on_bit(info->put_map, 1)
-            clear_bit(old_last, info->put_map);
-            wake_on_bit(info->put_map, 0)
-        }
-*/
+
+        if(first_put) wake_on_bit(info->put_map, 0)
+
         clear_bit(block_index, info->put_map);
         clear_bit(block_index, info->free_blocks);
     failure_1:
@@ -137,6 +128,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
     int loaded_bytes, len, fail;
+    unsigned int seq;
     char * msg;
     size_t ret;
 
@@ -148,22 +140,26 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     /* Check input parameters */
     aos_sb = info->sb;
-    if (offset < 2 || offset > aos_sb.partition_size || size < 0 || size > aos_sb.data_block_size) {
+    if (offset < 2 || offset >= aos_sb.partition_size || size < 0 || size > aos_sb.data_block_size) {
         fail = -EINVAL;
         goto failure;
     }
 
-    DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] started on block %llu\n", MODNAME, current->pid, offset); }
+    DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] Started on block %llu\n", MODNAME, current->pid, offset); }
 
     /* Read given block */
-    bh = sb_bread(info->vfs_sb, offset);
-    if(!bh) {
-        fail = -EIO;
-        goto failure;
-    }
-    // copy the data in another memory location to release the buffer head
-    memcpy(&data_block, bh->b_data, aos_sb.block_size);
-    brelse(bh);
+    do {
+        DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] Try read block %llu\n", MODNAME, current->pid, offset); }
+        seq = read_seqbegin(&info->block_locks[offset]);
+        bh = sb_bread(info->vfs_sb, offset);
+        if(!bh) {
+            fail = -EIO;
+            goto failure;
+        }
+        // copy the data in another memory location to release the buffer head
+        memcpy(&data_block, bh->b_data, aos_sb.block_size);
+        brelse(bh);
+    } while (read_seqretry(&info->block_locks[offset], seq));
 
     /* Check data validity */
     if (!data_block.metadata.is_valid) {
@@ -189,16 +185,18 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     __sync_fetch_and_sub(&info->counter, 1);
     wake_up_interruptible(&wq);
 
-    AUDIT { printk(KERN_INFO "%s: [get_data()] successful - read %d bytes in block %llu\n", MODNAME, loaded_bytes, offset); }
+    AUDIT { printk(KERN_INFO "%s: [get_data() - %d] Read %d bytes in block %llu\n",
+                   MODNAME, current->pid, loaded_bytes, offset); }
     return loaded_bytes;
 
-    failure:
-        __sync_fetch_and_sub(&info->counter, 1);
-        wake_up_interruptible(&wq);
+failure:
+    __sync_fetch_and_sub(&info->counter, 1);
+    wake_up_interruptible(&wq);
 
-        AUDIT { printk(KERN_INFO "%s: [get_data()] on block %llu failed with error %d\n", MODNAME, offset, fail); }
+    AUDIT { printk(KERN_INFO "%s: [get_data() - %d] Get on block %llu failed with error %d\n",
+                   MODNAME, current->pid, offset, fail); }
 
-        return fail;
+    return fail;
 }
 
 /**
@@ -212,6 +210,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
+    //unsigned int seq;
     int fail, nblocks;
     uint64_t prev, next;
 
@@ -246,57 +245,49 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     /* If the invalidation operates on 'last' block, it must wait for the PUT that is eventually
      * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
-    //if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
+    wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE);
 
-    /* Get the block */
+    write_seqlock(&info->block_locks[offset]);
+
     bh = sb_bread(info->vfs_sb, offset);
     if(!bh) {
         fail = -EIO;
+        write_sequnlock(&info->block_locks[offset]);
         goto failure_2;
     }
     data_block = (struct aos_data_block*)bh->b_data;
 
-    /* Check data validity */
-    if (!data_block->metadata.is_valid) {
-        fail = -ENODATA;
-        goto failure_3;
-    }
+    prev = data_block->metadata.prev;
+    next = data_block->metadata.next;
 
-    /* Avoid conflicts between concurrent invalidations. Possible deadlocks.
-     * If the block is 'first' or 'last', one of these two wait is logically useless,
-     * but needed for implementations concerns, such as calling the following atomic operations without conflict. */
+    /* Avoid conflicts between concurrent invalidations. Possible deadlocks. */
     fail = wait_inv(info->inv_map, data_block->metadata.prev);
     if (fail < 0) goto failure_3;
     fail = wait_inv(info->inv_map, data_block->metadata.next);
     if (fail < 0) goto failure_3;
 
-    prev = data_block->metadata.prev;
-    next = data_block->metadata.next;
-
     if (__sync_bool_compare_and_swap(&info->first, offset, next)) { // If 'offset' is 'first', change 'first' to 'next'
-        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Atomically swapped 'first' from %u to %llu. \n",
-                       MODNAME, current->pid, offset, next); }
         if(!__sync_bool_compare_and_swap(&info->last, offset, 1)) { // If 'offset' is 'first' AND 'last', change 'last' to 1
             /* Set 1 as 'prev' of the next block */
             fail = change_blocks_metadata(1, next);
             if (fail < 0) goto failure_4;
-        } else {
-            DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Atomically swapped 'last' from %u to %d. \n",
-                           MODNAME, current->pid, offset, 1); }
         }
     } else if (__sync_bool_compare_and_swap(&info->last, offset, prev)) { // If 'offset' is 'last', change 'last' to 'prev'
-        DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Atomically swapped 'last' from %u to %llu. \n",
-                       MODNAME, current->pid, offset, prev); }
         /* Set 0 as 'next' of the previous block */
         fail = change_blocks_metadata(prev, 0);
         if (fail < 0) goto failure_4;
     } else {
         /* Write new 'prev' and 'next' on blocks */
         fail = change_blocks_metadata(prev, next);
-        if (fail < 0) goto failure_3;
+        if (fail < 0) {
+            clear_bit(next, info->inv_map);
+            goto failure_3;
+        }
     }
 
-    invalidate_block(data_block, bh);
+    invalidate_block(offset, data_block, bh);
+
+    write_sequnlock(&info->block_locks[offset]);
 
     /* Finalize the invalidation: set invalid block as free to write on and release the bit in INV_MAP */
     clear_bit(offset, info->free_blocks);
@@ -315,6 +306,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         __sync_bool_compare_and_swap(&info->first, next, offset); // if first was changed into next, reset it
     failure_3:
         brelse(bh);
+        write_sequnlock(&info->block_locks[offset]);
     failure_2:
         wake_on_bit(info->inv_map, offset)
     failure_1:

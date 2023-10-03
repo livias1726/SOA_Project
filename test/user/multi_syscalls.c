@@ -42,17 +42,10 @@ void* multi_invalidate_data(void *arg){
 
     block = (rand()%NBLOCKS)+2; //(tid%NBLOCKS)+2;
 
-//retry:
     ret = syscall(inv, block);
     if(ret < 0) {
         check_error(tid, "INV");
-        if (errno == EAGAIN) {
-            printf("[%d] - INV on %d RETRY\n", tid, block);
-            /*
-            sleep(1);
-            goto retry;
-             */
-        }
+        if (errno == EAGAIN) printf("[%d] - INV on %d RETRY\n", tid, block);
         pthread_exit((void*)-1);
     } else {
         printf("[%d] - INV on %d\n", tid, block);
