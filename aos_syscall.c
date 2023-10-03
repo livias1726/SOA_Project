@@ -70,19 +70,15 @@ asmlinkage int sys_put_data(char * source, size_t size){
      * with other PUT operations thanks to the above loop. */
     set_bit(block_index, info->put_map);
 
-    /* Wait for the completion of an eventual INVALIDATION on 'last'. */
-    wait_on_bit(info->inv_map, info->last, TASK_INTERRUPTIBLE);
-
-    /* Signal a pending PUT for possible INVALIDATION conflicts. 'first_put' will be 0 if this thread is the first
-     * to execute the PUT in a concurrent execution */
-    first_put = !test_and_set_bit(0, info->put_map);
-
     /* Update the last block. The order in which this operation is performed will be the order of concurrent PUT */
     old_last = __atomic_exchange_n(&info->last, block_index, __ATOMIC_SEQ_CST);
 
-    /* Signal a pending PUT on last to avoid conflicting with an INV that comes after the update of 'last'.
-     * It doesn't matter if another PUT has already set this.*/
-    if (first_put) set_bit(old_last, info->put_map);
+    /* Wait for the completion of an eventual INVALIDATION on 'last'. */
+    wait_on_bit(info->inv_map, old_last, TASK_INTERRUPTIBLE);
+
+    /* Signal a pending PUT for possible INVALIDATION conflicts. 'first_put' will be 0 if this thread is the first
+     * to execute the PUT in a concurrent execution */
+    //first_put = !test_and_set_bit(0, info->put_map);
 
     DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'last' from %llu to %llu. \n",
                    MODNAME, current->pid, old_last, block_index); }
@@ -93,11 +89,12 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     /* Signal completion of PUT operation on given block */
     clear_bit(block_index, info->put_map);
+    /*
     if(first_put) {
         //wake_on_bit(info->put_map, 1)
         clear_bit(old_last, info->put_map);
         wake_on_bit(info->put_map, 0)
-    }
+    }*/
 
     /* Release resources */
     __sync_fetch_and_sub(&info->counter, 1);
@@ -109,13 +106,13 @@ asmlinkage int sys_put_data(char * source, size_t size){
     failure_2:
         __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first'
         __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' (if no thread has changed it)
-
+/*
         if(first_put) {
             //wake_on_bit(info->put_map, 1)
             clear_bit(old_last, info->put_map);
             wake_on_bit(info->put_map, 0)
         }
-
+*/
         clear_bit(block_index, info->put_map);
         clear_bit(block_index, info->free_blocks);
     failure_1:
@@ -249,7 +246,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     /* If the invalidation operates on 'last' block, it must wait for the PUT that is eventually
      * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
-    if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
+    //if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
 
     /* Get the block */
     bh = sb_bread(info->vfs_sb, offset);
@@ -262,14 +259,12 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     /* Check data validity */
     if (!data_block->metadata.is_valid) {
         fail = -ENODATA;
-        goto failure_2;
+        goto failure_3;
     }
 
-    /* Wait on bits 'prev' and 'next' in INV_MAP to keep going. Avoid conflicts between concurrent invalidations.
-     * To avoid possible deadlocks between invalidations (which has to lock 3 blocks to execute), the wait is
-     * temporized: invalidations can abort and return with EAGAIN to retry the operation. If the block is 'first'
-     * or 'last', one of these two wait is useless logically, but needed for implementations concerns, such as calling
-     * the following atomic operations without conflict. */
+    /* Avoid conflicts between concurrent invalidations. Possible deadlocks.
+     * If the block is 'first' or 'last', one of these two wait is logically useless,
+     * but needed for implementations concerns, such as calling the following atomic operations without conflict. */
     fail = wait_inv(info->inv_map, data_block->metadata.prev);
     if (fail < 0) goto failure_3;
     fail = wait_inv(info->inv_map, data_block->metadata.next);
