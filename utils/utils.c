@@ -140,8 +140,6 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
      * to point to the new block. */
     if (prev == 1) {
         *old_first = __atomic_exchange_n(&info->first, blk, __ATOMIC_RELAXED);
-        DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'first' from %d to %d. \n",
-                       MODNAME, current->pid, *old_first, blk); }
     } else{
         /* Writes on the 'next' metadata of the previous block (old_last) */
         res = change_block_next(prev, blk);
@@ -178,6 +176,3 @@ void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_
     brelse(bh);
 }
 
-int wait_for_invalidation(){
-
-}
