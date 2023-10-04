@@ -106,7 +106,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     /* Signal completion of PUT operation on given block */
     clear_bit(block_index, info->put_map);
+#ifdef SEQ_INV
     if(first_put) { wake_on_bit(info->put_map, 0) }
+#endif
 
     /* Release resources */
     __sync_fetch_and_sub(&info->counter, 1);
@@ -119,7 +121,9 @@ asmlinkage int sys_put_data(char * source, size_t size){
         __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first'
         __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' (if no thread has changed it)
     failure_2:
+#ifdef SEQ_INV
         if(first_put) { wake_on_bit(info->put_map, 0) }
+#endif
 
         clear_bit(block_index, info->put_map);
         clear_bit(block_index, info->free_blocks);
