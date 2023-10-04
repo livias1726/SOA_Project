@@ -12,6 +12,7 @@ void* multi_put_data(void *arg){
     size = strlen(msg);
 
     ret = syscall(put, msg, size);
+    free(msg);
     if(ret < 0) {
         check_error(tid, "PUT");
         pthread_exit((void*)-1);

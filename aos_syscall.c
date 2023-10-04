@@ -226,7 +226,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int fail, nblocks;
+    int fail, nblocks, wait;
     uint64_t prev, next;
 
     /* Check if device is mounted */
@@ -246,8 +246,10 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
 #ifdef SEQ_INV
     /* An invalidation as to run with mutual exclusion from other writers */
-    wait_on_bit_lock(info->inv_map, 0, TASK_INTERRUPTIBLE); // locks invalidations
-    wait_on_bit(info->put_map, 0, TASK_INTERRUPTIBLE);  // waits for the first put to be over (conflicts on 'last')
+    wait = wait_on_bit_lock(info->inv_map, 0, TASK_INTERRUPTIBLE); // locks invalidations
+    check_wait(wait, fail, failure_1)
+    wait = wait_on_bit(info->put_map, 0, TASK_INTERRUPTIBLE);  // waits for the first put to be over (conflicts on 'last')
+    check_wait(wait, fail, failure_2)
 #else
     /* Signal a pending INV on selected block. Test and set is used to atomically detect concurrent invalidations
      * on the same block and stop them all except for the first to set the flag. */
@@ -273,8 +275,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     bh = sb_bread(info->vfs_sb, offset);
     if(!bh) {
         fail = -EIO;
-        write_sequnlock(&info->block_locks[offset]);
-        goto failure_2;
+        goto failure_3;
     }
     data_block = (struct aos_data_block*)bh->b_data;
 
@@ -289,7 +290,8 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     if (fail < 0) goto failure_3;
     fail = wait_inv(info->inv_map, data_block->metadata.next);
     if (fail < 0) goto failure_3;
-#elif RELAXED_INV
+#endif
+#ifdef RELAXED_INV
     if(test_and_set_bit(prev, info->inv_map)){
         fail = -EAGAIN;
         goto failure_3;
@@ -316,10 +318,11 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         /* Write new 'prev' and 'next' on blocks */
         fail = change_blocks_metadata(prev, next);
         if (fail < 0) {
+            goto failure_4;
 #ifdef RELAXED_INV
             clear_bit(next, info->inv_map);
-#endif
             goto failure_3;
+#endif
         }
     }
 
@@ -329,7 +332,11 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     /* Finalize the invalidation: set invalid block as free to write on and release the bit in INV_MAP */
     clear_bit(offset, info->free_blocks);
+#ifdef SEQ_INV
+    wake_on_bit(info->inv_map, 0)
+#else
     wake_on_bit(info->inv_map, offset)
+#endif
 
     /* Release resources */
     __sync_fetch_and_sub(&info->counter, 1);
@@ -342,11 +349,15 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     failure_4:
         __sync_bool_compare_and_swap(&info->last, prev, offset); // if last was changed into prev, reset it
         __sync_bool_compare_and_swap(&info->first, next, offset); // if first was changed into next, reset it
-    failure_3:
         brelse(bh);
+    failure_3:
         write_sequnlock(&info->block_locks[offset]);
     failure_2:
+#ifdef SEQ_INV
+        wake_on_bit(info->inv_map, 0)
+#else
         wake_on_bit(info->inv_map, offset)
+#endif
     failure_1:
         __sync_fetch_and_sub(&info->counter, 1);
         wake_up_interruptible(&wq);

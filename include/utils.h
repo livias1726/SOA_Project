@@ -5,6 +5,8 @@
     clear_bit(bit, map);      \
     wake_up_bit(map, bit);    \
 
+#define check_wait(w,err,label) if(w){err = -EAGAIN; goto label;}
+
 int put_new_block(int blk, char* source, size_t size, int prev, int *old_first);
 int change_blocks_metadata(int prev_blk, int next_blk);
 void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh);
