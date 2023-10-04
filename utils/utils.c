@@ -127,15 +127,6 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
     int res;
     size_t ret;
 
-    write_seqlock(&info->block_locks[blk]);
-
-    bh = sb_bread(info->vfs_sb, blk);
-    if(!bh) {
-        res = -EIO;
-        goto failure_1;
-    }
-    data_block = (struct aos_data_block*)bh->b_data;
-
     /* If the block is the first to be written (prev is 1), then there's no need to update the previous one
      * to point to the new block. */
     if (prev == 1) {
@@ -143,8 +134,17 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
     } else{
         /* Writes on the 'next' metadata of the previous block (old_last) */
         res = change_block_next(prev, blk);
-        if (res < 0) goto failure_2;
+        if (res < 0) goto failure_1;
     }
+
+    write_seqlock(&info->block_locks[blk]);
+
+    bh = sb_bread(info->vfs_sb, blk);
+    if(!bh) {
+        res = -EIO;
+        goto failure_2;
+    }
+    data_block = (struct aos_data_block*)bh->b_data;
 
     // Write block on device
     ret = copy_from_user(data_block->data.msg, source, size);
@@ -155,23 +155,23 @@ int put_new_block(int blk, char* source, size_t size, int prev, int *old_first){
 
     mark_buffer_dirty(bh);
     WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device
+    brelse(bh);
 
     res = size;
 
     failure_2:
-        brelse(bh);
-    failure_1:
         write_sequnlock(&info->block_locks[blk]);
+    failure_1:
         return res;
 }
 
 void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh){
 
-    //write_seqlock(&info->block_locks[blk]);
+    write_seqlock(&info->block_locks[blk]);
     data_block->metadata.is_valid = 0;
     mark_buffer_dirty(bh);
     sync_dirty_buffer(bh);
-    //write_sequnlock(&info->block_locks[blk]);
+    write_sequnlock(&info->block_locks[blk]);
 
     brelse(bh);
 }

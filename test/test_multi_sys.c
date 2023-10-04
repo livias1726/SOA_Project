@@ -117,39 +117,29 @@ int main(int argc, char *argv[]){
 
     switch(getint()){
         case 1:
-            pthread_barrier_init(&barrier, NULL, THREADS_PER_CALL);
             single_call(multi_put_data);
             break;
         case 2:
-            pthread_barrier_init(&barrier, NULL, THREADS_PER_CALL);
             single_call(multi_get_data);
             break;
         case 3:
-            pthread_barrier_init(&barrier, NULL, THREADS_PER_CALL);
             single_call(multi_invalidate_data);
             break;
         case 4:
-            pthread_barrier_init(&barrier, NULL, 2*THREADS_PER_CALL);
             put_and_get();
             break;
         case 5:
-            pthread_barrier_init(&barrier, NULL, 2*THREADS_PER_CALL);
             get_and_inv();
             break;
         case 6:
-            pthread_barrier_init(&barrier, NULL, 2*THREADS_PER_CALL);
             only_writers();
             break;
         case 7:
-            pthread_barrier_init(&barrier, NULL, NUM_SYSCALLS*THREADS_PER_CALL);
             all_calls();
             break;
         default:
             break;
     }
-
-    pthread_barrier_wait(&barrier);
-    pthread_barrier_destroy(&barrier);
 
     return 0;
 }

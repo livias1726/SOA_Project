@@ -14,7 +14,6 @@ int main(int argc, char *argv[]){
            "Device operations (open, read, close)\n"
            /*"Device management (unmount).\n"*/);
 
-    pthread_barrier_init(&barrier, NULL, THREADS_PER_CALL);
     srand(time(NULL));
 
     for (i = 0; i < THREADS_PER_CALL; ++i) {
@@ -33,8 +32,6 @@ int main(int argc, char *argv[]){
             pthread_join(tids[j][i], NULL);
         }
     }
-
-    pthread_barrier_destroy(&barrier);
 
     return 0;
 }

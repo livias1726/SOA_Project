@@ -1,6 +1,5 @@
 #include "../user.h"
 
-pthread_barrier_t barrier;
 int put;
 int get;
 int inv;

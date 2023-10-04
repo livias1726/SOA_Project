@@ -36,7 +36,7 @@ __SYSCALL_DEFINEx(2, _put_data, char *, source, size_t, size){
 asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     struct aos_super_block aos_sb;
-    int nblocks, avb_size, fail, old_first, first_put;
+    int nblocks, avb_size, fail, old_first, first_put, wait;
     uint64_t block_index, old_last;
 
     /* Check if device is mounted */
@@ -73,7 +73,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
     /* WARNING: possible deadlock */
     /* Signal a pending PUT for possible INVALIDATION conflicts */
     first_put = !test_and_set_bit(0, info->put_map);    // Multiple put can operate at the same time
-    wait_on_bit(info->inv_map, 0, TASK_INTERRUPTIBLE);  // Wait current invalidation
+    wait = wait_on_bit(info->inv_map, 0, TASK_INTERRUPTIBLE);  // Wait current invalidation
+    check_wait(wait, fail, failure_2)
 #endif
     /*
     // Signal a pending PUT on selected block
@@ -101,7 +102,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     old_first = -1;
     fail = put_new_block(block_index, source, size, old_last, &old_first);
-    if (fail < 0) goto failure_2;
+    if (fail < 0) goto failure_3;
 
     /* Signal completion of PUT operation on given block */
     clear_bit(block_index, info->put_map);
@@ -114,10 +115,10 @@ asmlinkage int sys_put_data(char * source, size_t size){
     AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put %d bytes in block %llu\n", MODNAME, current->pid, fail, block_index); }
     return block_index;
 
-    failure_2:
+    failure_3:
         __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first'
         __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' (if no thread has changed it)
-
+    failure_2:
         if(first_put) { wake_on_bit(info->put_map, 0) }
 
         clear_bit(block_index, info->put_map);
