@@ -24,11 +24,11 @@ static inline int wait_inv(ulong *map, int bit){
     return 0;
 }
 
-static inline int get_blk(struct buffer_head *bh, struct super_block* sb, int blk, struct aos_data_block** db){
+static inline int get_blk(struct buffer_head **bh, struct super_block* sb, int blk, struct aos_data_block** db){
 
-    bh = sb_bread(sb, blk);
-    if(!bh) return -EIO;
-    *db = (struct aos_data_block*)bh->b_data;
+    *bh = sb_bread(sb, blk);
+    if(!*bh) return -EIO;
+    *db = (struct aos_data_block*)(*bh)->b_data;
 
     return 0;
 }

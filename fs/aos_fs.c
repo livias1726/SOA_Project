@@ -186,14 +186,16 @@ failure_1:
 static void aos_kill_superblock(struct super_block *sb){
     struct buffer_head *bh;
     struct aos_super_block *aos_sb;
+    int trials = 0;
 
     /* Atomically set the device as unmounted, to stop every new thread trying to access the device */
     __atomic_store_n(&is_mounted, 0, __ATOMIC_RELAXED);
 
     /* Wait for every thread already in the device to complete */
-    while (info->counter) {
+    while (info->counter && trials < SYSCALL_TRIALS) {
         wait_event_interruptible_timeout(wq, (info->counter == 0), msecs_to_jiffies(JIFFIES));
         printk(KERN_INFO "%s: waiting to unmount...\n", MODNAME);
+        trials++;
     }
 
     /* Read superblock */
