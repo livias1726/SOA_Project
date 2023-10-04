@@ -66,19 +66,35 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Started on block %llu\n", MODNAME, current->pid, block_index); }
 
-    /* Signal a pending PUT on selected block. This cannot cause conflicts
-     * with other PUT operations thanks to the above loop. */
+    /* Signal a pending PUT on selected block */
     set_bit(block_index, info->put_map);
 
-    /* Update the last block. The order in which this operation is performed will be the order of concurrent PUT */
+#ifdef SEQ_INV
+    /* WARNING: possible deadlock */
+    /* Signal a pending PUT for possible INVALIDATION conflicts */
+    first_put = !test_and_set_bit(0, info->put_map);    // Multiple put can operate at the same time
+    wait_on_bit(info->inv_map, 0, TASK_INTERRUPTIBLE);  // Wait current invalidation
+#endif
+    /*
+    // Signal a pending PUT on selected block
+    set_bit(block_index, info->put_map);
+    // Wait for the completion of an eventual INVALIDATION on 'last'
+    wait_on_bit(info->inv_map, info->last, TASK_INTERRUPTIBLE);
+    // Signal a pending PUT for possible INVALIDATION conflicts BEFORE last update
+    first_put = !test_and_set_bit(0, info->put_map);
+    // Update last
+    old_last = __atomic_exchange_n(&info->last, block_index, __ATOMIC_SEQ_CST);
+    // Signal a pending PUT on old_last to avoid conflicting with an INV AFTER the update of 'last'
+    if (first_put) set_bit(old_last, info->put_map);
+*/
+    // Update last
     old_last = __atomic_exchange_n(&info->last, block_index, __ATOMIC_SEQ_CST);
 
-    /* Wait for the completion of an eventual INVALIDATION on 'last'. */
-    wait_on_bit(info->inv_map, old_last, TASK_INTERRUPTIBLE);
-
-    /* Signal a pending PUT for possible INVALIDATION conflicts. 'first_put' will be 0 if this thread is the first
-     * to execute the PUT in a concurrent execution */
-    first_put = !test_and_set_bit(PUT_BIT, info->put_map);
+    /*
+    set_bit(block_index, info->put_map);
+    old_last = __atomic_exchange_n(&info->last, block_index, __ATOMIC_SEQ_CST);
+    //wait_on_bit(info->inv_map, old_last, TASK_INTERRUPTIBLE);
+    */
 
     DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'last' from %llu to %llu. \n",
                    MODNAME, current->pid, old_last, block_index); }
@@ -89,7 +105,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     /* Signal completion of PUT operation on given block */
     clear_bit(block_index, info->put_map);
-    if(first_put) wake_on_bit(info->put_map, 0)
+    if(first_put) { wake_on_bit(info->put_map, 0) }
 
     /* Release resources */
     __sync_fetch_and_sub(&info->counter, 1);
@@ -102,7 +118,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
         __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first'
         __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' (if no thread has changed it)
 
-        if(first_put) wake_on_bit(info->put_map, 0)
+        if(first_put) { wake_on_bit(info->put_map, 0) }
 
         clear_bit(block_index, info->put_map);
         clear_bit(block_index, info->free_blocks);
@@ -210,7 +226,6 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 #endif
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    //unsigned int seq;
     int fail, nblocks;
     uint64_t prev, next;
 
@@ -229,15 +244,21 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     DEBUG { printk(KERN_DEBUG "%s: [invalidate_data() - %d] Started on block %d\n", MODNAME, current->pid, offset); }
 
+#ifdef SEQ_INV
+    /* An invalidation as to run with mutual exclusion from other writers */
+    wait_on_bit_lock(info->inv_map, 0, TASK_INTERRUPTIBLE); // locks invalidations
+    wait_on_bit(info->put_map, 0, TASK_INTERRUPTIBLE);  // waits for the first put to be over (conflicts on 'last')
+#else
     /* Signal a pending INV on selected block. Test and set is used to atomically detect concurrent invalidations
      * on the same block and stop them all except for the first to set the flag. */
     if (test_and_set_bit(offset, info->inv_map)) {
         fail = -ENODATA;
         goto failure_1;
     }
-
-    /* Check current pending PUT on the same block: if a PUT is pending on the block it means that the block
-     * has currently no valid data associated yet. This falls into the case of ENODATA error. */
+#endif
+    /* Check current pending PUT on the same block and free blocks bitmap:
+     * if a PUT is pending on the block it means that the block has currently no valid data associated yet.
+     * This falls into the case of ENODATA error. */
     if (test_bit(offset, info->put_map) || !test_bit(offset, info->free_blocks)) {
         fail = -ENODATA;
         goto failure_2;
@@ -245,7 +266,7 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
 
     /* If the invalidation operates on 'last' block, it must wait for the PUT that is eventually
      * currently operating on last. This is the PUT that firstly set the specific bit in 'put_map'. */
-    wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE);
+    //if (offset == info->last) { wait_on_bit(info->put_map, PUT_BIT, TASK_INTERRUPTIBLE); }
 
     write_seqlock(&info->block_locks[offset]);
 
@@ -260,11 +281,26 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
     prev = data_block->metadata.prev;
     next = data_block->metadata.next;
 
-    /* Avoid conflicts between concurrent invalidations. Possible deadlocks. */
+    /* Avoid conflicts between concurrent invalidations. Possible deadlocks.
+     * If the block is 'first' or 'last', one of these two wait is logically useless,
+     * but needed for implementations concerns, such as calling the following atomic operations without conflict. */
+#ifdef TIMEOUT_INV
     fail = wait_inv(info->inv_map, data_block->metadata.prev);
     if (fail < 0) goto failure_3;
     fail = wait_inv(info->inv_map, data_block->metadata.next);
     if (fail < 0) goto failure_3;
+#elif RELAXED_INV
+    if(test_and_set_bit(prev, info->inv_map)){
+        fail = -EAGAIN;
+        goto failure_3;
+    }
+
+    if(test_and_set_bit(next, info->inv_map)){
+        fail = -EAGAIN;
+        clear_bit(prev, info->inv_map);
+        goto failure_3;
+    }
+#endif
 
     if (__sync_bool_compare_and_swap(&info->first, offset, next)) { // If 'offset' is 'first', change 'first' to 'next'
         if(!__sync_bool_compare_and_swap(&info->last, offset, 1)) { // If 'offset' is 'first' AND 'last', change 'last' to 1
@@ -280,7 +316,9 @@ asmlinkage int sys_invalidate_data(uint32_t offset){
         /* Write new 'prev' and 'next' on blocks */
         fail = change_blocks_metadata(prev, next);
         if (fail < 0) {
+#ifdef RELAXED_INV
             clear_bit(next, info->inv_map);
+#endif
             goto failure_3;
         }
     }

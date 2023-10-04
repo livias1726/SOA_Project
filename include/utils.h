@@ -7,7 +7,7 @@
 
 int put_new_block(int blk, char* source, size_t size, int prev, int *old_first);
 int change_blocks_metadata(int prev_blk, int next_blk);
-void invalidate_block(struct aos_data_block *data_block, struct buffer_head *bh);
+void invalidate_block(int blk, struct aos_data_block *data_block, struct buffer_head *bh);
 
 static inline int wait_inv(ulong *map, int bit){
     bool wait;
