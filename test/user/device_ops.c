@@ -64,7 +64,7 @@ void orc(){
     }
 
     printf("2. Reading the device... ");
-    ret = read(fd, buf, 64 * 1024/*DEVICE_SIZE*/); /*TODO*/
+    ret = read(fd, buf, DEVICE_SIZE); /* TODO: manage max memory */
     if (ret < 0) {
         check_error(fd, "Read");
         free(buf);

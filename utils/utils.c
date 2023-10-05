@@ -146,11 +146,10 @@ int change_blocks_metadata(int prev_blk, int next_blk){
 int put_new_block(int blk, char* source, size_t size, int old_last){
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int res, old_first;
+    int res;
     size_t ret;
     uint64_t prev, next;
 
-    /* NOTEME: Maybe there's no need to lock this block... */
     write_seqlock(&info->block_locks[blk]);
 
     res = get_blk(&bh, info->vfs_sb, blk, &data_block);
@@ -160,15 +159,14 @@ int put_new_block(int blk, char* source, size_t size, int old_last){
     next = data_block->metadata.next;
 
     if (prev && next) {
-        /* If blk that is being inserted is the one set as 'first', update 'first' to its successor */
-        old_first = __sync_val_compare_and_swap(&info->first, blk, next);
-        /* If the previous block is also the old 'last', then don't update its metadata */
-        if (prev != old_last) {
+        /* Update 'prev' and 'next' metadata if and only if:
+         * - blk is not 'first' (else, update 'first' to its successor)
+         * - 'prev' is not 'old_last'
+         * - 'prev' is not 'next'
+         * */
+        if (!__sync_bool_compare_and_swap(&info->first, blk, next) && prev != old_last && prev != next) {
             res = change_blocks_metadata(prev, next);
-            if (res < 0) {
-                __sync_val_compare_and_swap(&info->first, blk, old_first); // reset 'first'
-                goto failure_2;
-            }
+            if (res < 0) goto failure_2;
         }
     }
 

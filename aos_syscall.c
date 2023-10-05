@@ -74,21 +74,12 @@ asmlinkage int sys_put_data(char * source, size_t size){
     DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'last' from %llu to %llu. \n",
                    MODNAME, current->pid, old_last, block_index); }
 
-/*
-    // If the block is the first to be written (prev is 1), update 'first'
-    if (old_last == 1) {
-        old_first = __atomic_exchange_n(&info->first, block_index, __ATOMIC_RELAXED);
-    } else{
-        // Writes on the 'next' metadata of the previous block (old_last)
-        fail = change_block_next(old_last, block_index);
-        if (fail < 0) goto failure_2;
-    }
-*/
     /* If the block is the first to be written, update 'first' */
     if (old_last == 1) {
         old_first = __atomic_exchange_n(&info->first, block_index, __ATOMIC_RELAXED);
     } else{
         /* Writes on the 'next' metadata of the previous block (old_last) */
+        wait_on_bit(info->put_map, old_last, TASK_INTERRUPTIBLE);
         fail = change_block_next(old_last, block_index);
         if (fail < 0) goto failure_2;
     }
@@ -97,7 +88,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
     if (fail < 0) goto failure_3;
 
     /* Signal completion of PUT operation on given block */
-    clear_bit(block_index, info->put_map);
+    wake_on_bit(info->put_map, block_index) //clear_bit(block_index, info->put_map);
 
     /* Release resources */
     __sync_fetch_and_sub(&info->counter, 1);
@@ -110,7 +101,7 @@ asmlinkage int sys_put_data(char * source, size_t size){
         __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first'
         __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' (if no thread has changed it)
     failure_2:
-        clear_bit(block_index, info->put_map);
+        wake_on_bit(info->put_map, block_index) //clear_bit(block_index, info->put_map);
         clear_bit(block_index, info->free_blocks);
     failure_1:
         __sync_fetch_and_sub(&info->counter, 1);
@@ -155,7 +146,6 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     /* Read given block */
     do {
-        DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] Try read block %llu\n", MODNAME, current->pid, offset); }
         seq = read_seqbegin(&info->block_locks[offset]);
         bh = sb_bread(info->vfs_sb, offset);
         if(!bh) {
