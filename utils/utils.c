@@ -135,19 +135,22 @@ int change_blocks_metadata(int prev_blk, int next_blk){
     write_sequnlock(&info->block_locks[next_blk]);
     /* ---------------------------------------- NEXT */
 
+
+
     return fail;
 }
 
 /**
  * Inserts a new message in the given block, updating its metadata
  * */
-int put_new_block(int blk, char* source, size_t size, int new_prev){
+int put_new_block(int blk, char* source, size_t size, int old_last){
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int res;
+    int res, old_first;
     size_t ret;
     uint64_t prev, next;
 
+    /* NOTEME: Maybe there's no need to lock this block... */
     write_seqlock(&info->block_locks[blk]);
 
     res = get_blk(&bh, info->vfs_sb, blk, &data_block);
@@ -155,9 +158,18 @@ int put_new_block(int blk, char* source, size_t size, int new_prev){
 
     prev = data_block->metadata.prev;
     next = data_block->metadata.next;
+
     if (prev && next) {
-        res = change_blocks_metadata(prev, next);
-        if (res < 0) goto failure_2;
+        /* If blk that is being inserted is the one set as 'first', update 'first' to its successor */
+        old_first = __sync_val_compare_and_swap(&info->first, blk, next);
+        /* If the previous block is also the old 'last', then don't update its metadata */
+        if (prev != old_last) {
+            res = change_blocks_metadata(prev, next);
+            if (res < 0) {
+                __sync_val_compare_and_swap(&info->first, blk, old_first); // reset 'first'
+                goto failure_2;
+            }
+        }
     }
 
     // Write block on device
@@ -165,7 +177,7 @@ int put_new_block(int blk, char* source, size_t size, int new_prev){
     size -= ret;
     data_block->data.msg[size+1] = '\0';
     data_block->metadata.is_valid = 1;
-    data_block->metadata.prev = new_prev;
+    data_block->metadata.prev = old_last;
 
     mark_buffer_dirty(bh);
     WB { sync_dirty_buffer(bh); } // immediate synchronous write on the device

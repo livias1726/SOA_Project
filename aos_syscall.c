@@ -71,11 +71,20 @@ asmlinkage int sys_put_data(char * source, size_t size){
 
     /* Update last */
     old_last = __atomic_exchange_n(&info->last, block_index, __ATOMIC_SEQ_CST);
-
     DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'last' from %llu to %llu. \n",
                    MODNAME, current->pid, old_last, block_index); }
 
-    /* If the block is the first to be written (prev is 1), update 'first' */
+/*
+    // If the block is the first to be written (prev is 1), update 'first'
+    if (old_last == 1) {
+        old_first = __atomic_exchange_n(&info->first, block_index, __ATOMIC_RELAXED);
+    } else{
+        // Writes on the 'next' metadata of the previous block (old_last)
+        fail = change_block_next(old_last, block_index);
+        if (fail < 0) goto failure_2;
+    }
+*/
+    /* If the block is the first to be written, update 'first' */
     if (old_last == 1) {
         old_first = __atomic_exchange_n(&info->first, block_index, __ATOMIC_RELAXED);
     } else{

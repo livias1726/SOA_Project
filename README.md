@@ -8,5 +8,6 @@
   * PUT CONFLICTS -> if last is updated A->B but blocks metadata is updated B->A, it could break
 
 
-* Quando put legge che 'prev' è 1 -> seleziona 'next' come nuovo 'first'. Invalidate non si occupa di 
-    aggiornare 'first'! (analizza i casi in cui inv aggiorna first e/o last)
+* Quando put legge che 'prev' è 1 -> seleziona 'next' come nuovo 'first' iff 'blk' è first. 
+* Analizza i casi in cui inv aggiorna first e/o last
+* 
