@@ -7,73 +7,83 @@
 
 extern aos_fs_info_t *info;
 
-/*
- * Updates the 'next' variable in the metadata of the given block.
- * Used by:
- * - PUT operations to chronologically link a block to the next one.
- * - INV operations to logically remove a block from the chain of readable blocks.
+/**
+ * Updates the 'prev' and/or 'next' variable in the metadata of a block.
+ * @param prev_blk
+ * @param next_blk
+ * @param mode represents the type of update requested: 0 for the previous block, 1 for the next block, 2 for both
  * */
-int change_block_next(int blk, int next_blk){
-    struct buffer_head *bh_prev;
-    struct aos_data_block *prev_block;
-    int fail;
-
-    write_seqlock(&info->block_locks[blk]);
-
-    fail = get_blk(&bh_prev, info->vfs_sb, blk, &prev_block);
-    if (fail < 0) goto failure;
-
-    prev_block->metadata.next = next_blk;
-
-    mark_buffer_dirty(bh_prev);
-    brelse(bh_prev);
-
-failure:
-    write_sequnlock(&info->block_locks[blk]);
-    return fail;
-}
-
-/*
- * Updates both the 'prev' and 'next' variable in the metadata of the given block.
- * Used by INV operations to logically remove a block from the chain of readable blocks.
- * */
-int change_blocks_metadata(int prev_blk, int next_blk){
+static int change_blocks_metadata(int prev_blk, int next_blk, int mode){
     struct buffer_head *bh_next, *bh_prev;
     struct aos_data_block *next_block, *prev_block;
     int fail;
 
-    /* PREV ---------------------------------------- */
-    write_seqlock(&info->block_locks[prev_blk]);
+    switch(mode) {
+        case 0: /* Change only the previous block's metadata */
+            write_seqlock(&info->block_locks[prev_blk]);
 
-    fail = get_blk(&bh_prev, info->vfs_sb, prev_blk, &prev_block);
-    if (fail < 0) {
-        write_sequnlock(&info->block_locks[prev_blk]);
-        return fail;
+            fail = get_blk(&bh_prev, info->vfs_sb, prev_blk, &prev_block);
+            if (fail < 0) {
+                write_sequnlock(&info->block_locks[prev_blk]);
+                return fail;
+            }
+
+            prev_block->metadata.next = next_blk;
+
+            mark_buffer_dirty(bh_prev);
+            brelse(bh_prev);
+
+            write_sequnlock(&info->block_locks[prev_blk]);
+            break;
+        case 1: /* Change only the next block's metadata */
+            write_seqlock(&info->block_locks[next_blk]);
+
+            fail = get_blk(&bh_next, info->vfs_sb, next_blk, &next_block);
+            if (fail < 0) {
+                write_sequnlock(&info->block_locks[next_blk]);
+                return fail;
+            }
+            next_block->metadata.prev = prev_blk;
+
+            mark_buffer_dirty(bh_next);
+            brelse(bh_next);
+
+            write_sequnlock(&info->block_locks[next_blk]);
+            break;
+        case 2: /* Change both blocks' metadata */
+            /* PREV ---------------------------------------- */
+            write_seqlock(&info->block_locks[prev_blk]);
+
+            fail = get_blk(&bh_prev, info->vfs_sb, prev_blk, &prev_block);
+            if (fail < 0) {
+                write_sequnlock(&info->block_locks[prev_blk]);
+                return fail;
+            }
+
+            prev_block->metadata.next = next_blk;
+
+            mark_buffer_dirty(bh_prev);
+            brelse(bh_prev);
+
+            write_sequnlock(&info->block_locks[prev_blk]);
+            /* ---------------------------------------- PREV */
+            /* NEXT ---------------------------------------- */
+            write_seqlock(&info->block_locks[next_blk]);
+
+            fail = get_blk(&bh_next, info->vfs_sb, next_blk, &next_block);
+            if (fail < 0) {
+                write_sequnlock(&info->block_locks[next_blk]);
+                return fail;
+            }
+            next_block->metadata.prev = prev_blk;
+
+            mark_buffer_dirty(bh_next);
+            brelse(bh_next);
+
+            write_sequnlock(&info->block_locks[next_blk]);
+            /* ---------------------------------------- NEXT */
+            break;
     }
-
-    prev_block->metadata.next = next_blk;
-
-    mark_buffer_dirty(bh_prev);
-    brelse(bh_prev);
-
-    write_sequnlock(&info->block_locks[prev_blk]);
-    /* ---------------------------------------- PREV */
-
-    /* NEXT ---------------------------------------- */
-    write_seqlock(&info->block_locks[next_blk]);
-
-    fail = get_blk(&bh_next, info->vfs_sb, next_blk, &next_block);
-    if (fail < 0) {
-        write_sequnlock(&info->block_locks[next_blk]);
-        return fail;
-    }
-    next_block->metadata.prev = prev_blk;
-
-    mark_buffer_dirty(bh_next);
-    brelse(bh_next);
-
-    write_sequnlock(&info->block_locks[next_blk]);
-    /* ---------------------------------------- NEXT */
 
     return fail;
 }
@@ -128,21 +138,29 @@ int put_new_block(int blk, char* source, size_t size, int old_last){
         prev = data_block->metadata.prev;
         next = data_block->metadata.next;
 
-        __sync_bool_compare_and_swap(&info->first, blk, next); /* checkme: only if next != 0 ?? */
-
-        if (prev != old_last) {
-            if (prev != next) {
-                res = change_blocks_metadata(prev, next);
+        if (next != 0) {
+            if (__sync_bool_compare_and_swap(&info->first, blk, next)) {
+                res = change_blocks_metadata(1, next, 1);
                 if (res < 0) {
                     brelse(bh);
                     goto failure_1;
                 }
             }
 
-            res = change_block_next(old_last, blk);
-            if (res < 0) {
-                brelse(bh);
-                goto failure_1;
+            if (prev != old_last) {
+                /* checkme: if (prev != next) {  dovrebbe capitare sempre se viene messo next = 0 per i last */
+                    res = change_blocks_metadata(prev, next, 2);
+                    if (res < 0) {
+                        brelse(bh);
+                        goto failure_1;
+                    }
+                //}
+
+                res = change_blocks_metadata(old_last, blk, 0);
+                if (res < 0) {
+                    brelse(bh);
+                    goto failure_1;
+                }
             }
         }
     }

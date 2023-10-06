@@ -1,6 +1,6 @@
 #include "../user.h"
 
-char* msgs[] = {LOREM, EMERALD, LUCIFER};
+char* msgs[] = {lorem, emerald, lucifer};
 int sizes[] = {SIZE_LOREM, SIZE_EMERALD, SIZE_LUCIFER};
 
 void* multi_put_data(void *arg){
