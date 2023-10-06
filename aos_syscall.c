@@ -36,7 +36,7 @@ __SYSCALL_DEFINEx(2, _put_data, char *, source, size_t, size){
 asmlinkage int sys_put_data(char * source, size_t size){
 #endif
     struct aos_super_block aos_sb;
-    int nblocks, avb_size, fail, old_first;
+    int nblocks, avb_size, fail;
     uint64_t block_index, old_last;
 
     /* Check if device is mounted */
@@ -74,18 +74,8 @@ asmlinkage int sys_put_data(char * source, size_t size){
     DEBUG { printk(KERN_DEBUG "%s: [put_data() - %d] Atomically swapped 'last' from %llu to %llu. \n",
                    MODNAME, current->pid, old_last, block_index); }
 
-    /* If the block is the first to be written, update 'first' */
-    if (old_last == 1) {
-        old_first = __atomic_exchange_n(&info->first, block_index, __ATOMIC_RELAXED);
-    } else{
-        /* Writes on the 'next' metadata of the previous block (old_last) */
-        wait_on_bit(info->put_map, old_last, TASK_INTERRUPTIBLE);
-        fail = change_block_next(old_last, block_index);
-        if (fail < 0) goto failure_2;
-    }
-
     fail = put_new_block(block_index, source, size, old_last);
-    if (fail < 0) goto failure_3;
+    if (fail < 0) goto failure_2;
 
     /* Signal completion of PUT operation on given block */
     wake_on_bit(info->put_map, block_index) //clear_bit(block_index, info->put_map);
@@ -97,12 +87,10 @@ asmlinkage int sys_put_data(char * source, size_t size){
     AUDIT { printk(KERN_INFO "%s: [put_data() - %d] Put %d bytes in block %llu\n", MODNAME, current->pid, fail, block_index); }
     return block_index;
 
-    failure_3:
-        __sync_val_compare_and_swap(&info->first, block_index, old_first); // reset 'first'
-        __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' (if no thread has changed it)
     failure_2:
-        wake_on_bit(info->put_map, block_index) //clear_bit(block_index, info->put_map);
+        __sync_val_compare_and_swap(&info->last, block_index, old_last); // reset 'last' (if no thread has changed it)
         clear_bit(block_index, info->free_blocks);
+        wake_on_bit(info->put_map, block_index) //clear_bit(block_index, info->put_map);
     failure_1:
         __sync_fetch_and_sub(&info->counter, 1);
         wake_up_interruptible(&wq);
