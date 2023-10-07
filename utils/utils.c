@@ -18,71 +18,38 @@ static int change_blocks_metadata(int prev_blk, int next_blk, int mode){
     struct aos_data_block *next_block, *prev_block;
     int fail;
 
-    switch(mode) {
-        case 0: /* Change only the previous block's metadata */
-            write_seqlock(&info->block_locks[prev_blk]);
+    if (prev_blk != 1) {
+        write_seqlock(&info->block_locks[prev_blk]);
 
-            fail = get_blk(&bh_prev, info->vfs_sb, prev_blk, &prev_block);
-            if (fail < 0) {
-                write_sequnlock(&info->block_locks[prev_blk]);
-                return fail;
-            }
-
-            prev_block->metadata.next = next_blk;
-
-            mark_buffer_dirty(bh_prev);
-            brelse(bh_prev);
-
+        fail = get_blk(&bh_prev, info->vfs_sb, prev_blk, &prev_block);
+        if (fail < 0) {
             write_sequnlock(&info->block_locks[prev_blk]);
-            break;
-        case 1: /* Change only the next block's metadata */
-            write_seqlock(&info->block_locks[next_blk]);
+            return fail;
+        }
 
-            fail = get_blk(&bh_next, info->vfs_sb, next_blk, &next_block);
-            if (fail < 0) {
-                write_sequnlock(&info->block_locks[next_blk]);
-                return fail;
-            }
-            next_block->metadata.prev = prev_blk;
+        prev_block->metadata.next = next_blk;
 
-            mark_buffer_dirty(bh_next);
-            brelse(bh_next);
+        mark_buffer_dirty(bh_prev);
+        brelse(bh_prev);
 
+        write_sequnlock(&info->block_locks[prev_blk]);
+    }
+
+    if (mode == 2) {
+        /* Change only the next block's metadata */
+        write_seqlock(&info->block_locks[next_blk]);
+
+        fail = get_blk(&bh_next, info->vfs_sb, next_blk, &next_block);
+        if (fail < 0) {
             write_sequnlock(&info->block_locks[next_blk]);
-            break;
-        case 2: /* Change both blocks' metadata */
-            /* PREV ---------------------------------------- */
-            write_seqlock(&info->block_locks[prev_blk]);
+            return fail;
+        }
+        next_block->metadata.prev = prev_blk;
 
-            fail = get_blk(&bh_prev, info->vfs_sb, prev_blk, &prev_block);
-            if (fail < 0) {
-                write_sequnlock(&info->block_locks[prev_blk]);
-                return fail;
-            }
+        mark_buffer_dirty(bh_next);
+        brelse(bh_next);
 
-            prev_block->metadata.next = next_blk;
-
-            mark_buffer_dirty(bh_prev);
-            brelse(bh_prev);
-
-            write_sequnlock(&info->block_locks[prev_blk]);
-            /* ---------------------------------------- PREV */
-            /* NEXT ---------------------------------------- */
-            write_seqlock(&info->block_locks[next_blk]);
-
-            fail = get_blk(&bh_next, info->vfs_sb, next_blk, &next_block);
-            if (fail < 0) {
-                write_sequnlock(&info->block_locks[next_blk]);
-                return fail;
-            }
-            next_block->metadata.prev = prev_blk;
-
-            mark_buffer_dirty(bh_next);
-            brelse(bh_next);
-
-            write_sequnlock(&info->block_locks[next_blk]);
-            /* ---------------------------------------- NEXT */
-            break;
+        write_sequnlock(&info->block_locks[next_blk]);
     }
 
     return fail;
@@ -138,30 +105,20 @@ int put_new_block(int blk, char* source, size_t size, int old_last){
         prev = data_block->metadata.prev;
         next = data_block->metadata.next;
 
+        __sync_bool_compare_and_swap(&info->first, blk, next);
+
         if (next != 0) {
-            if (__sync_bool_compare_and_swap(&info->first, blk, next)) {
-                res = change_blocks_metadata(1, next, 1);
-                if (res < 0) {
-                    brelse(bh);
-                    goto failure_1;
-                }
+            res = change_blocks_metadata(prev, next, 2);
+            if (res < 0) {
+                brelse(bh);
+                goto failure_1;
             }
+        }
 
-            if (prev != old_last) {
-                /* checkme: if (prev != next) {  dovrebbe capitare sempre se viene messo next = 0 per i last */
-                    res = change_blocks_metadata(prev, next, 2);
-                    if (res < 0) {
-                        brelse(bh);
-                        goto failure_1;
-                    }
-                //}
-
-                res = change_blocks_metadata(old_last, blk, 0);
-                if (res < 0) {
-                    brelse(bh);
-                    goto failure_1;
-                }
-            }
+        res = change_blocks_metadata(old_last, blk, 0);
+        if (res < 0) {
+            brelse(bh);
+            goto failure_1;
         }
     }
 
