@@ -7,50 +7,53 @@
 
 extern aos_fs_info_t *info;
 
-/**
- * Updates the 'prev' and/or 'next' variable in the metadata of a block.
- * @param prev_blk
- * @param next_blk
- * @param mode represents the type of update requested: 0 for the previous block, 1 for the next block, 2 for both
+/*
+ * Opens the block with index 'blk' and updates the metadata pointing to its successor with 'next'.
  * */
-static int change_blocks_metadata(int prev_blk, int next_blk, int mode){
-    struct buffer_head *bh_next, *bh_prev;
-    struct aos_data_block *next_block, *prev_block;
+static int change_block_next(int blk, int next){
+    struct buffer_head *bh_prev;
+    struct aos_data_block *prev_block;
     int fail;
 
-    if (prev_blk != 1) {
-        write_seqlock(&info->block_locks[prev_blk]);
+    write_seqlock(&info->block_locks[blk]);
 
-        fail = get_blk(&bh_prev, info->vfs_sb, prev_blk, &prev_block);
-        if (fail < 0) {
-            write_sequnlock(&info->block_locks[prev_blk]);
-            return fail;
-        }
-
-        prev_block->metadata.next = next_blk;
-
-        mark_buffer_dirty(bh_prev);
-        brelse(bh_prev);
-
-        write_sequnlock(&info->block_locks[prev_blk]);
+    fail = get_blk(&bh_prev, info->vfs_sb, blk, &prev_block);
+    if (fail < 0) {
+        write_sequnlock(&info->block_locks[blk]);
+        return fail;
     }
 
-    if (mode == 2) {
-        /* Change only the next block's metadata */
-        write_seqlock(&info->block_locks[next_blk]);
+    prev_block->metadata.next = next;
 
-        fail = get_blk(&bh_next, info->vfs_sb, next_blk, &next_block);
-        if (fail < 0) {
-            write_sequnlock(&info->block_locks[next_blk]);
-            return fail;
-        }
-        next_block->metadata.prev = prev_blk;
+    mark_buffer_dirty(bh_prev);
+    brelse(bh_prev);
 
-        mark_buffer_dirty(bh_next);
-        brelse(bh_next);
+    write_sequnlock(&info->block_locks[blk]);
 
-        write_sequnlock(&info->block_locks[next_blk]);
+    return fail;
+}
+
+/*
+ * Opens the block with index 'blk' and updates the metadata pointing to its predecessor with 'prev'.
+ * */
+static int change_block_prev(int blk, int prev) {
+    struct buffer_head *bh_next;
+    struct aos_data_block *next_block;
+    int fail;
+
+    write_seqlock(&info->block_locks[blk]);
+
+    fail = get_blk(&bh_next, info->vfs_sb, blk, &next_block);
+    if (fail < 0) {
+        write_sequnlock(&info->block_locks[blk]);
+        return fail;
     }
+    next_block->metadata.prev = prev;
+
+    mark_buffer_dirty(bh_next);
+    brelse(bh_next);
+
+    write_sequnlock(&info->block_locks[blk]);
 
     return fail;
 }
@@ -108,14 +111,22 @@ int put_new_block(int blk, char* source, size_t size, int old_last){
         __sync_bool_compare_and_swap(&info->first, blk, next);
 
         if (next != 0) {
-            res = change_blocks_metadata(prev, next, 2);
+            if (prev != 1) {
+                res = change_block_next(prev, next);
+                if (res < 0) {
+                    brelse(bh);
+                    goto failure_1;
+                }
+            }
+
+            res = change_block_prev(next, prev);
             if (res < 0) {
                 brelse(bh);
                 goto failure_1;
             }
         }
 
-        res = change_blocks_metadata(old_last, blk, 0);
+        res = change_block_next(old_last, blk);
         if (res < 0) {
             brelse(bh);
             goto failure_1;
@@ -154,9 +165,9 @@ int invalidate_block(int blk){
     prev = data_block->metadata.prev;
     next = data_block->metadata.next;
 
-    // If 'offset' is 'first', change 'first' to 'next'
-    // If 'offset' is 'first' AND 'last', change 'last' to 1
-    // If 'offset' is 'last', change 'last' to 'prev'
+    /* - If 'offset' is 'first', change 'first' to 'next'
+     * - If 'offset' is 'first' AND 'last', change 'last' to 1
+     * - If 'offset' is 'last', change 'last' to 'prev' */
     (__sync_bool_compare_and_swap(&info->first, blk, next)) ?
     __sync_bool_compare_and_swap(&info->last, blk, 1) : __sync_bool_compare_and_swap(&info->last, blk, prev);
 
