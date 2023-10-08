@@ -4,11 +4,23 @@ int put;
 int get;
 int inv;
 
+char* getstr(){
+    char* msg = malloc(MAX_STR);
+    if (!msg) {
+        printf("malloc failed\n");
+        return NULL;
+    }
+
+    fgets(msg, MAX_STR, stdin);
+
+    return msg;
+}
+
 int getint(){
     int i = 0;
-    char s[MAX_IN], c;
+    char s[MAX_INT], c;
 
-    while ((c = getchar()) != '\n' && i < MAX_IN-1) {
+    while ((c = getchar()) != '\n' && i < MAX_INT-1) {
         s[i++] = c;
     }
     if (!i)

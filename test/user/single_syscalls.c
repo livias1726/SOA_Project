@@ -29,7 +29,11 @@ void test_put_data(){
             break;
         default:
             printf("Insert a message: ");
-            scanf("%s", msg); // fixme: segfault
+            msg = getstr();
+            if (!msg) {
+                printf("malloc failed\n");
+                exit(EXIT_FAILURE);
+            }
             size = strlen(msg);
     }
 

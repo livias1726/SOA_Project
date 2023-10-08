@@ -16,7 +16,8 @@
 #define DEVICE_SIZE (4096 * NBLOCKS)
 #define NUM_SYSCALLS 3
 #define THREADS_PER_CALL 10
-#define MAX_IN 5
+#define MAX_INT 5
+#define MAX_STR 4096
 
 #define SIZE_LOREM 447
 #define SIZE_EMERALD 1023
@@ -66,6 +67,7 @@ extern int inv;
 
 int check_input(int argc, char **argv);
 int getint();
+char* getstr();
 void check_error(int tid, char* call);
 
 // single thread

@@ -67,8 +67,8 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     char *msg, *block_msg;
     loff_t b_idx, offset, nblocks;
 
-    /* Check device state validity: if 'first' is 0 (superblock index), the device is brand new and empty */
-    if (!info->first) return -ENODATA;
+    /* Check device state validity: if 'last' is 1, the device is empty */
+    if (info->last == 1) return -ENODATA;
 
     /* Retrieve device info */
     aos_sb = info->sb;
@@ -91,7 +91,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         b_idx = info->first;
         offset = 0;
     } else {
-        b_idx = (*f_pos >> 32) % nblocks;   // retrieve last block accessed by the current thread (high 32 bits)
+        b_idx = (*f_pos >> 32) % nblocks;   // checkme retrieve last block accessed by the current thread (high 32 bits)
         offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread (low 32 bits)
     }
 
@@ -120,24 +120,13 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
          * This ensures that a writing on the block is always detected, even if the read is already executing. */
         if (!data_block.metadata.is_valid) {
             b_idx = data_block.metadata.next;
+            offset = 0; // reset intra-block offset
             continue;
         }
 
         /* Use the file pointer offset to start reading from given position in the file */
-        if (offset) {
-            block_msg = data_block.data.msg + offset;
-            offset = 0; // reset intra-block offset
-        } else {
-            block_msg = data_block.data.msg;
-        }
-
+        block_msg = (offset != 0) ? data_block.data.msg + offset : data_block.data.msg;
         len = strlen(block_msg);
-
-        /* Check data availability */
-        if (!len) {
-            b_idx = data_block.metadata.next;
-            continue;
-        }
 
         AUDIT { printk(KERN_DEBUG "%s: read operation accessed block %lld of the device\n", MODNAME, b_idx); }
 
@@ -156,6 +145,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         bytes_read += 1;
 
         b_idx = data_block.metadata.next;
+        offset = 0; // reset intra-block offset
     }
 
     ret = (bytes_read > 0) ? copy_to_user(buf, msg, bytes_read) : 0;
