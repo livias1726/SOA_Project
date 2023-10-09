@@ -44,7 +44,7 @@ fail:
 }
 
 void orc(){
-    int fd, ret;
+    int fd, count, ret, tot;
     char *buf;
 
     printf("Starting device operations tests...\n");
@@ -57,20 +57,26 @@ void orc(){
     }
     printf("OK\n");
 
-    buf = malloc(DEVICE_SIZE);
+    count = DEVICE_SIZE;
+    buf = malloc(count);
     if (!buf) {
         perror("Malloc failed.");
         exit(EXIT_FAILURE);
     }
 
     printf("2. Reading the device... ");
-    ret = read(fd, buf, DEVICE_SIZE); /* TODO: manage max memory */
-    if (ret < 0) {
-        check_error(fd, "Read");
-        free(buf);
-        return;
+    ret = -1;
+    tot = 0;
+    while(ret != 0 && tot < count) {
+        ret = read(fd, buf, count-tot);
+        if (ret < 0) {
+            check_error(fd, "Read");
+            free(buf);
+            return;
+        }
+        printf("%d bytes read.\n", ret); //Retrieved message is: %s\n", ret, buf);
+        tot += ret;
     }
-    printf("%d bytes read.\n", ret); //Retrieved message is: %s\n", ret, buf);
 
     free(buf);
 
@@ -84,34 +90,6 @@ void orc(){
 }
 
 void* multi_orc(){
-    int fd, ret;
-    char *buf;
-
-    printf("Starting device operations tests...\n");
-
-    printf("1. Opening the device: ");
-    fd = open(DEVICE_PATH, O_RDONLY);
-    if (fd < 0) {
-        check_error(fd, "Open");
-        pthread_exit((void*)-1);
-    }
-
-    buf = malloc(DEVICE_SIZE);
-    if (!buf) {
-        perror("Malloc failed.");
-        exit(EXIT_FAILURE);
-    }
-
-    printf("2. Reading the device: ");
-    ret = read(fd, buf, DEVICE_SIZE);
-    if (ret < 0) check_error(fd, "Read");
-    printf("\t%d bytes read.\n", ret);
-
-    free(buf);
-
-    printf("3. Closing the device: ");
-    ret = close(fd);
-    if (ret < 0) check_error(fd, "Close");
-
+    orc();
     pthread_exit(0);
 }

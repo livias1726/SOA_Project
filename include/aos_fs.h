@@ -24,6 +24,7 @@
 
 #define check_mount if (!is_mounted) return -ENODEV
 #define EXTRA_BITS(dim) (AOS_BLOCK_SIZE/sizeof(ulong) - ((dim) * (sizeof(uint64_t)/sizeof(ulong))))
+#define MAX_READ (64 * 1024)
 
 /* Superblock definition */
 struct aos_super_block {

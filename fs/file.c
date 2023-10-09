@@ -7,6 +7,7 @@
 #include <linux/string.h>
 
 #include "../include/aos_fs.h"
+#include "../include/utils.h"
 
 /**
  * The device driver should support file system operations allowing the access to the currently saved data:
@@ -58,12 +59,10 @@ int aos_release(struct inode *inode, struct file *filp){
  * */
 ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
 
-    struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
     int len, ret, data_block_size, bytes_read, last_block;
     bool is_last;
-    unsigned int seq;
     char *msg, *block_msg;
     loff_t b_idx, offset, nblocks;
 
@@ -83,6 +82,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     if (!buf) return -EINVAL;
 
     /* Allocate memory */
+    if (count > MAX_READ) { count = MAX_READ; }
     msg = kzalloc(count, GFP_KERNEL);
     if(!msg) return -ENOMEM;
 
@@ -91,30 +91,25 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         b_idx = info->first;
         offset = 0;
     } else {
-        b_idx = (*f_pos >> 32) % nblocks;   // checkme retrieve last block accessed by the current thread (high 32 bits)
+        b_idx = (*f_pos >> 32);   // retrieve last block accessed by the current thread (high 32 bits)
         offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread (low 32 bits)
     }
 
     last_block = info->last;
 
-    printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
-           MODNAME, current->pid, b_idx, offset);
+    AUDIT { printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
+           MODNAME, current->pid, b_idx, offset); }
 
     bytes_read = 0;
     while((bytes_read < count) && (!is_last)){
         is_last = (b_idx == last_block);
 
         /* Read data block into a local variable */
-        do {
-            seq = read_seqbegin(&info->block_locks[b_idx]);
-            bh = sb_bread(info->vfs_sb, b_idx);
-            if(!bh) {
-                kfree(msg);
-                return -EIO;
-            }
-            memcpy(&data_block, bh->b_data, data_block_size);
-            brelse(bh);
-        } while (read_seqretry(&info->block_locks[b_idx], seq));
+        ret = cpy_blk(info->vfs_sb, &info->block_locks[b_idx], b_idx, data_block_size, &data_block);
+        if (ret < 0) {
+            kfree(msg);
+            return ret;
+        }
 
         /* Check data validity: invalidation could happen while reading the block.
          * This ensures that a writing on the block is always detected, even if the read is already executing. */
@@ -152,11 +147,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     kfree(msg);
 
     // set high 32 bits of f_pos to the current index i and low 32 bits of f_pos to the new offset count
-    if (is_last) {
-        *f_pos = (nblocks << 32);
-    } else {
-        *f_pos = (b_idx << 32) | offset;
-    }
+    *f_pos = (is_last) ? (nblocks << 32) : (b_idx << 32) | offset;
 
     AUDIT { printk(KERN_INFO "%s: read operation by thread %d completed\n", MODNAME, current->pid); }
 

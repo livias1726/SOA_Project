@@ -109,11 +109,9 @@ __SYSCALL_DEFINEx(3, _get_data, uint64_t, offset, char *, destination, size_t, s
 #else
 asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 #endif
-    struct buffer_head *bh;
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
     int loaded_bytes, len, fail;
-    unsigned int seq;
     char * msg;
     size_t ret;
 
@@ -133,17 +131,8 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] Started on block %llu\n", MODNAME, current->pid, offset); }
 
     /* Read given block */
-    do {
-        seq = read_seqbegin(&info->block_locks[offset]);
-        bh = sb_bread(info->vfs_sb, offset);
-        if(!bh) {
-            fail = -EIO;
-            goto failure;
-        }
-        // copy the data in another memory location to release the buffer head
-        memcpy(&data_block, bh->b_data, aos_sb.block_size);
-        brelse(bh);
-    } while (read_seqretry(&info->block_locks[offset], seq));
+    fail = cpy_blk(info->vfs_sb, &info->block_locks[offset], offset, aos_sb.block_size, &data_block);
+    if (fail < 0) goto failure;
 
     /* Check data validity */
     if (!data_block.metadata.is_valid) {
