@@ -144,15 +144,10 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
 
     /* Check message length */
     len = strlen(msg);
-    if (len == 0) { // no available data
-        fail = 0;
-        goto failure;
-    } else if (len < size) {
-        size = len;
-    }
+    if (len < size) size = len;
 
     /* Try to read 'size' bytes of data starting from 'offset' into 'destination' */
-    ret = copy_to_user(destination, msg, size);
+    ret = (len == 0) ? 0 : copy_to_user(destination, msg, size);
     loaded_bytes = size - ret;
 
     __sync_fetch_and_sub(&info->counter, 1);
