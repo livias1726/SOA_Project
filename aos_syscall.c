@@ -131,7 +131,7 @@ asmlinkage int sys_get_data(uint64_t offset, char * destination, size_t size){
     DEBUG { printk(KERN_DEBUG "%s: [get_data() - %d] Started on block %llu\n", MODNAME, current->pid, offset); }
 
     /* Read given block */
-    fail = cpy_blk(info->vfs_sb, &info->block_locks[offset], offset, aos_sb.block_size, &data_block);
+    fail = cpy_blk(info->vfs_sb, offset, aos_sb.block_size, &data_block);
     if (fail < 0) goto failure;
 
     /* Check data validity */

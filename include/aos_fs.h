@@ -82,8 +82,6 @@ typedef struct aos_fs_info {
     ulong *free_blocks;         /* Pointer to a bitmap to represent the counter of each data block */
     ulong *put_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
     ulong *inv_map;             /* Pointer to a bitmap to signal a pending PUT on a given block */
-    //------------------------------------------------------------------------
-    seqlock_t *block_locks;
 } aos_fs_info_t;
 
 static DECLARE_WAIT_QUEUE_HEAD(wq);

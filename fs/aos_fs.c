@@ -26,7 +26,6 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
 
     int nblocks = aos_sb->partition_size;
     int longs = BITS_TO_LONGS(nblocks);     /* Number of unsigned longs needed to cover nblocks bits */
-    int i;
 
     /* Allocate bitmaps */
     info->free_blocks = kzalloc(longs * sizeof(long), GFP_KERNEL);
@@ -50,21 +49,10 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
     info->first = aos_sb->first;
     info->last = aos_sb->last;
 
-    /* Init every seqlock associated to each block */
-    info->block_locks = kzalloc(nblocks * sizeof(seqlock_t), GFP_KERNEL);
-    if (!info->block_locks) {
-        printk(KERN_ALERT "%s: [init_fs_info()] couldn't allocate seqlocks\n", MODNAME);
-        goto fail_4;
-    }
-
-    for (i = 0; i < nblocks; ++i) { seqlock_init(&info->block_locks[i]); }
-
     info->vfs_sb->s_fs_info = info;
 
     return 0;
 
-    fail_4:
-        kfree(info->inv_map);
     fail_3:
         kfree(info->put_map);
     fail_2:
@@ -177,7 +165,6 @@ failure_2:
     kfree(info->free_blocks);
     kfree(info->put_map);
     kfree(info->inv_map);
-    kfree(info->block_locks);
 failure_1:
     kfree(info);
     return fail;
@@ -218,7 +205,6 @@ failure:
     kfree(info->free_blocks);
     kfree(info->put_map);
     kfree(info->inv_map);
-    kfree(info->block_locks);
     kfree(info);
 
     kill_block_super(sb);

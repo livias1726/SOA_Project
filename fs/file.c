@@ -105,7 +105,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         is_last = (b_idx == last_block);
 
         /* Read data block into a local variable */
-        ret = cpy_blk(info->vfs_sb, &info->block_locks[b_idx], b_idx, data_block_size, &data_block);
+        ret = cpy_blk(info->vfs_sb, b_idx, data_block_size, &data_block);
         if (ret < 0) {
             kfree(msg);
             return ret;

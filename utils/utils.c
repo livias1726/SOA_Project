@@ -15,20 +15,13 @@ static int change_block_next(int blk, int next){
     struct aos_data_block *prev_block;
     int fail;
 
-    write_seqlock(&info->block_locks[blk]);
-
     fail = get_blk(&bh_prev, info->vfs_sb, blk, &prev_block);
-    if (fail < 0) {
-        write_sequnlock(&info->block_locks[blk]);
-        return fail;
-    }
+    if (fail < 0) return fail;
 
     prev_block->metadata.next = next;
 
     mark_buffer_dirty(bh_prev);
     brelse(bh_prev);
-
-    write_sequnlock(&info->block_locks[blk]);
 
     return fail;
 }
@@ -41,19 +34,12 @@ static int change_block_prev(int blk, int prev) {
     struct aos_data_block *next_block;
     int fail;
 
-    write_seqlock(&info->block_locks[blk]);
-
     fail = get_blk(&bh_next, info->vfs_sb, blk, &next_block);
-    if (fail < 0) {
-        write_sequnlock(&info->block_locks[blk]);
-        return fail;
-    }
+    if (fail < 0) return fail;
     next_block->metadata.prev = prev;
 
     mark_buffer_dirty(bh_next);
     brelse(bh_next);
-
-    write_sequnlock(&info->block_locks[blk]);
 
     return fail;
 }
@@ -90,8 +76,6 @@ int put_new_block(int blk, char* source, size_t size, int old_last){
     if (old_last == 1) { /* The block is the first to be inserted: no need to lock */
         old_first = __atomic_exchange_n(&info->first, blk, __ATOMIC_RELAXED);
 
-        write_seqlock(&info->block_locks[blk]);
-
         res = get_blk(&bh, info->vfs_sb, blk, &data_block);
         if (res < 0) goto failure_2;
 
@@ -99,8 +83,6 @@ int put_new_block(int blk, char* source, size_t size, int old_last){
         /* Wait for the previous PUT to complete to update the metadata */
         res = wait_on_bit(info->put_map, old_last, TASK_INTERRUPTIBLE);
         if (res) return -EBUSY;
-
-        write_seqlock(&info->block_locks[blk]);
 
         res = get_blk(&bh, info->vfs_sb, blk, &data_block);
         if(res < 0) goto failure_1;
@@ -136,14 +118,12 @@ int put_new_block(int blk, char* source, size_t size, int old_last){
     size = put_blk(old_last, size, source, bh, data_block);
 
     brelse(bh);
-    write_sequnlock(&info->block_locks[blk]);
 
     return size;
 
     failure_2:
         __sync_val_compare_and_swap(&info->first, blk, old_first); // reset 'first'
     failure_1:
-        write_sequnlock(&info->block_locks[blk]);
         return res;
 }
 
@@ -154,13 +134,8 @@ int invalidate_block(int blk){
     int fail;
     uint64_t prev, next;
 
-    write_seqlock(&info->block_locks[blk]);
-
     fail = get_blk(&bh, info->vfs_sb, blk, &data_block);
-    if (fail < 0) {
-        write_sequnlock(&info->block_locks[blk]);
-        return fail;
-    }
+    if (fail < 0) return fail;
 
     prev = data_block->metadata.prev;
     next = data_block->metadata.next;
@@ -173,7 +148,6 @@ int invalidate_block(int blk){
 
     data_block->metadata.is_valid = 0;
     mark_buffer_dirty(bh);
-    write_sequnlock(&info->block_locks[blk]);
 
     brelse(bh);
 
