@@ -1,3 +1,7 @@
+PUT := 174
+GET := 177
+INV := 178
+
 all:
 	gcc test_single_sys.c ./user/single_syscalls.c ./user/utils.c -o test_single_sys
 	gcc test_multi_sys.c ./user/multi_syscalls.c ./user/utils.c -lpthread -o test_multi_sys
@@ -11,13 +15,13 @@ clean:
 	rm super_test
 
 run-single:
-	./test_single_sys 174 177 178
+	./test_single_sys $(PUT) $(GET) $(INV)
 
 run-multi:
-	./test_multi_sys 174 177 178
+	./test_multi_sys $(PUT) $(GET) $(INV)
 
 run-dev:
 	./test_dev
 
 run-super:
-	./super_test 174 177 178
+	./super_test $(PUT) $(GET) $(INV)
