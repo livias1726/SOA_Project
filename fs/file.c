@@ -61,13 +61,13 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int len, ret, data_block_size, bytes_read, last_block;
+    int len, ret, data_block_size, bytes_read;
     bool is_last;
     char *msg, *block_msg;
-    loff_t b_idx, offset, nblocks;
+    loff_t b_idx, offset, nblocks, next;
 
     /* Check device state validity: if 'last' is 1, the device is empty */
-    if (info->last == 1) return -ENODATA;
+    if (info->first == 0 || info->last == 1) return -ENODATA;
 
     /* Retrieve device info */
     aos_sb = info->sb;
@@ -87,22 +87,15 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     if(!msg) return -ENOMEM;
 
     /* Parse file pointer */
-    if (*f_pos == 0) {
-        b_idx = info->first;
-        offset = 0;
-    } else {
-        b_idx = (*f_pos >> 32);   // retrieve last block accessed by the current thread (high 32 bits)
-        offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread (low 32 bits)
-    }
-
-    last_block = info->last;
+    b_idx = (*f_pos == 0) ? info->first : (*f_pos >> 32);   // retrieve last block accessed by the current thread (high 32 bits)
+    offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread (low 32 bits)
 
     AUDIT { printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
            MODNAME, current->pid, b_idx, offset); }
 
     bytes_read = 0;
     while((bytes_read < count) && (!is_last)){
-        is_last = (b_idx == last_block);
+        is_last = (b_idx == info->last);
 
         /* Read data block into a local variable */
         ret = cpy_blk(info->vfs_sb, b_idx, data_block_size, &data_block);
@@ -111,10 +104,13 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
             return ret;
         }
 
+        next = data_block.metadata.next;
+
         /* Check data validity: invalidation could happen while reading the block.
          * This ensures that a writing on the block is always detected, even if the read is already executing. */
         if (!data_block.metadata.is_valid) {
-            b_idx = data_block.metadata.next;
+            if (next == 0) break;
+            b_idx = next;
             offset = 0; // reset intra-block offset
             continue;
         }
@@ -139,7 +135,8 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         memcpy(msg + bytes_read, "\n", 1);
         bytes_read += 1;
 
-        b_idx = data_block.metadata.next;
+        if (next == 0) break;
+        b_idx = next;
         offset = 0; // reset intra-block offset
     }
 

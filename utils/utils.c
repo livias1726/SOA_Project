@@ -138,6 +138,11 @@ int invalidate_block(int blk){
     fail = get_blk(&bh, info->vfs_sb, blk, &data_block);
     if (fail < 0) return fail;
 
+    if (!data_block->metadata.is_valid) {
+        fail = -ENODATA;
+        goto failure;
+    }
+
     prev = data_block->metadata.prev;
     next = data_block->metadata.next;
 
@@ -151,8 +156,8 @@ int invalidate_block(int blk){
     if (is_last) data_block->metadata.next = 0;
     mark_buffer_dirty(bh);
 
+failure:
     brelse(bh);
-
-    return 0;
+    return fail;
 }
 
