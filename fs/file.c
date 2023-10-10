@@ -67,7 +67,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     loff_t b_idx, offset, nblocks;
 
     /* Check device state validity: if 'last' is 1, the device is empty */
-    if (info->last == 1) return -ENODATA;
+    if (info->first == 0 || info->last == 1) return -ENODATA;
 
     /* Retrieve device info */
     aos_sb = info->sb;
@@ -95,14 +95,14 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread (low 32 bits)
     }
 
-    last_block = info->last;
+    //last_block = info->last;
 
     AUDIT { printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
            MODNAME, current->pid, b_idx, offset); }
 
     bytes_read = 0;
     while((bytes_read < count) && (!is_last)){
-        is_last = (b_idx == last_block);
+        is_last = (b_idx == info->last); //last_block);
 
         /* Read data block into a local variable */
         ret = cpy_blk(info->vfs_sb, &info->block_locks[b_idx], b_idx, data_block_size, &data_block);

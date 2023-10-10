@@ -97,8 +97,10 @@ int put_new_block(int blk, char* source, size_t size, int old_last){
 
     } else {
         /* Wait for the previous PUT to complete to update the metadata */
-        res = wait_on_bit(info->put_map, old_last, TASK_INTERRUPTIBLE);
-        if (res) return -EBUSY;
+        if (old_last != blk) { /* PUTs may somehow wait on themselves and deadlock */
+            res = wait_on_bit(info->put_map, old_last, TASK_INTERRUPTIBLE);
+            if (res) return -EBUSY;
+        }
 
         write_seqlock(&info->block_locks[blk]);
 
