@@ -153,6 +153,7 @@ int invalidate_block(int blk){
     struct aos_data_block *data_block;
     int fail;
     uint64_t prev, next;
+    bool is_last = false;
 
     write_seqlock(&info->block_locks[blk]);
 
@@ -169,9 +170,10 @@ int invalidate_block(int blk){
      * - If 'offset' is 'first' AND 'last', change 'last' to 1
      * - If 'offset' is 'last', change 'last' to 'prev' */
     (__sync_bool_compare_and_swap(&info->first, blk, next)) ?
-    __sync_bool_compare_and_swap(&info->last, blk, 1) : __sync_bool_compare_and_swap(&info->last, blk, prev);
+    __sync_bool_compare_and_swap(&info->last, blk, 1) : (is_last = __sync_bool_compare_and_swap(&info->last, blk, prev));
 
     data_block->metadata.is_valid = 0;
+    if (is_last) data_block->metadata.next = 0;
     mark_buffer_dirty(bh);
     write_sequnlock(&info->block_locks[blk]);
 
