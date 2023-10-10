@@ -87,22 +87,15 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     if(!msg) return -ENOMEM;
 
     /* Parse file pointer */
-    if (*f_pos == 0) {
-        b_idx = info->first;
-        offset = 0;
-    } else {
-        b_idx = (*f_pos >> 32);   // retrieve last block accessed by the current thread (high 32 bits)
-        offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread (low 32 bits)
-    }
-
-    //last_block = info->last;
+    b_idx = (*f_pos == 0) ? info->first : (*f_pos >> 32);   // retrieve last block accessed by the current thread (high 32 bits)
+    offset = *f_pos & 0x00000000ffffffff; // retrieve last byte accessed by the current thread (low 32 bits)
 
     AUDIT { printk(KERN_INFO "%s: read operation called by thread %d - fp is (%lld, %lld)\n",
            MODNAME, current->pid, b_idx, offset); }
 
     bytes_read = 0;
     while((bytes_read < count) && (!is_last)){
-        is_last = (b_idx == info->last); //last_block);
+        is_last = (b_idx == info->last);
 
         /* Read data block into a local variable */
         ret = cpy_blk(info->vfs_sb, &info->block_locks[b_idx], b_idx, data_block_size, &data_block);
