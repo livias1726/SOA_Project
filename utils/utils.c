@@ -165,7 +165,7 @@ int invalidate_block(int blk){
         return fail;
     }
 
-    if (data_block->metadata.is_valid) {
+    if (!data_block->metadata.is_valid) {
         fail = -ENODATA;
         goto failure;
     }

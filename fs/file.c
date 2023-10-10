@@ -61,7 +61,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 
     struct aos_super_block aos_sb;
     struct aos_data_block data_block;
-    int len, ret, data_block_size, bytes_read, last_block;
+    int len, ret, data_block_size, bytes_read;
     bool is_last;
     char *msg, *block_msg;
     loff_t b_idx, offset, nblocks;
