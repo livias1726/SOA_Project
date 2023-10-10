@@ -64,7 +64,7 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
     int len, ret, data_block_size, bytes_read;
     bool is_last;
     char *msg, *block_msg;
-    loff_t b_idx, offset, nblocks;
+    loff_t b_idx, offset, nblocks, next;
 
     /* Check device state validity: if 'last' is 1, the device is empty */
     if (info->first == 0 || info->last == 1) return -ENODATA;
@@ -111,10 +111,13 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
             return ret;
         }
 
+        next = data_block.metadata.next;
+
         /* Check data validity: invalidation could happen while reading the block.
          * This ensures that a writing on the block is always detected, even if the read is already executing. */
         if (!data_block.metadata.is_valid) {
-            b_idx = data_block.metadata.next;
+            if (next == 0) break;
+            b_idx = next;
             offset = 0; // reset intra-block offset
             continue;
         }
@@ -139,7 +142,8 @@ ssize_t aos_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
         memcpy(msg + bytes_read, "\n", 1);
         bytes_read += 1;
 
-        b_idx = data_block.metadata.next;
+        if (next == 0) break;
+        b_idx = next;
         offset = 0; // reset intra-block offset
     }
 
