@@ -9,8 +9,8 @@
 #include "../include/config.h"
 
 /**
- * The device should be mounted on whichever directory of the file system to enable the operations by threads.
- * It is assumed that the device driver can support a single mount at a time.
+ * This module implements file system specific operations, such as the mount and unmount utilities and the function
+ * to fill the superblock and the 'info' structure.
  * */
 
 static struct super_operations aos_sb_ops = {
@@ -73,10 +73,9 @@ static int init_fs_info(struct aos_super_block* aos_sb) {
         return -ENOMEM;
 }
 
-/*
+/**
  * This function is called to terminate the superblock initialization, which involves filling the
  * struct super_block structure fields and the initialization of the root directory inode.
- *
  * The maximum number of manageable blocks is a parameter NBLOCKS that can be configured at compile time.
  * If a block-device layout keeps more than NBLOCKS blocks, the mount operation of the device should fail.
  * */
