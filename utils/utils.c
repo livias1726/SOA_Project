@@ -97,10 +97,10 @@ int put_new_block(int blk, char* source, size_t size, int old_last){
 
     } else {
         /* Wait for the previous PUT to complete to update the metadata */
-        if (old_last != blk) { /* PUTs may somehow wait on themselves and deadlock */
+        //if (old_last != blk) { // PUTs may somehow wait on themselves and deadlock
             res = wait_on_bit(info->put_map, old_last, TASK_INTERRUPTIBLE);
             if (res) return -EBUSY;
-        }
+       // }
 
         write_seqlock(&info->block_locks[blk]);
 
@@ -153,7 +153,7 @@ int invalidate_block(int blk){
 
     struct buffer_head *bh;
     struct aos_data_block *data_block;
-    int fail;
+    int fail = 0;
     uint64_t prev, next;
     bool is_last = false;
 
@@ -163,6 +163,11 @@ int invalidate_block(int blk){
     if (fail < 0) {
         write_sequnlock(&info->block_locks[blk]);
         return fail;
+    }
+
+    if (data_block->metadata.is_valid) {
+        fail = -ENODATA;
+        goto failure;
     }
 
     prev = data_block->metadata.prev;
@@ -177,10 +182,11 @@ int invalidate_block(int blk){
     data_block->metadata.is_valid = 0;
     if (is_last) data_block->metadata.next = 0;
     mark_buffer_dirty(bh);
-    write_sequnlock(&info->block_locks[blk]);
 
+failure:
+    write_sequnlock(&info->block_locks[blk]);
     brelse(bh);
 
-    return 0;
+    return fail;
 }
 
