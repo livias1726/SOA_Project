@@ -174,7 +174,7 @@ static struct dentry *aos_lookup(struct inode *parent_inode, struct dentry *dent
 
     // new VFS inode for a regular file
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,12,0)
-    inode_init_owner(&init_user_ns, my_inode, NULL, S_IFREG);
+    inode_init_owner(&init_user_ns, inode, NULL, S_IFREG);
 #else
     inode_init_owner(inode, NULL, S_IFREG);
 #endif
