@@ -5,6 +5,7 @@
 #include <linux/buffer_head.h>
 #include <linux/types.h>
 #include <linux/string.h>
+#include <linux/version.h>
 
 #include "../include/aos_fs.h"
 #include "../include/utils.h"
@@ -172,7 +173,12 @@ static struct dentry *aos_lookup(struct inode *parent_inode, struct dentry *dent
     if(!(inode->i_state & I_NEW)) return dentry;
 
     // new VFS inode for a regular file
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,12,0)
+    inode_init_owner(&init_user_ns, my_inode, NULL, S_IFREG);
+#else
     inode_init_owner(inode, NULL, S_IFREG);
+#endif
+
     inode->i_mode = (S_IFREG | S_IRWXU | S_IROTH | S_IXOTH);
     inode->i_fop = &aos_file_ops;
     inode->i_op = &aos_inode_ops;

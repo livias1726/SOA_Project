@@ -4,6 +4,7 @@
 #include <linux/time.h>
 #include <linux/buffer_head.h>
 #include <linux/slab.h>
+#include <linux/version.h>
 
 #include "../include/aos_fs.h"
 #include "../include/config.h"
@@ -142,7 +143,13 @@ static int aos_fill_super(struct super_block *sb, void *data, int silent) {
 
     if (root_inode->i_state & I_NEW) { // created a new inode
         root_inode->i_ino = ROOT_INODE_NUMBER;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,12,0)
+        inode_init_owner(&init_user_ns, root_inode, NULL, S_IFDIR);
+#else
         inode_init_owner(root_inode, NULL, S_IFDIR);
+#endif
+
         root_inode->i_sb = sb;
         root_inode->i_op = &aos_inode_ops;
         root_inode->i_fop = &aos_dir_ops;
